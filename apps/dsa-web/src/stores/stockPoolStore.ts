@@ -16,6 +16,7 @@ import { isObviouslyInvalidStockQuery, looksLikeStockCode, validateStockCode } f
 const PAGE_SIZE = 20;
 
 type SelectionSource = 'manual' | 'autocomplete' | 'import' | 'image';
+type HistoryWindowDays = 30 | 90 | null;
 
 type FetchHistoryOptions = {
   autoSelectFirst?: boolean;
@@ -52,6 +53,9 @@ export interface StockPoolState {
   isLoadingMore: boolean;
   hasMore: boolean;
   currentPage: number;
+  historyTotal: number;
+  isLoadingAllHistory: boolean;
+  historyWindowDays: HistoryWindowDays;
   selectedReport: AnalysisReport | null;
   isLoadingReport: boolean;
   activeTasks: TaskInfo[];
@@ -71,6 +75,8 @@ export interface StockPoolState {
   loadInitialHistory: () => Promise<void>;
   refreshHistory: (silent?: boolean) => Promise<void>;
   loadMoreHistory: () => Promise<void>;
+  loadAllHistory: () => Promise<void>;
+  setHistoryWindowDays: (days: HistoryWindowDays) => Promise<void>;
   selectHistoryItem: (recordId: number) => Promise<void>;
   toggleHistorySelection: (recordId: number) => void;
   toggleSelectAllVisible: () => void;
@@ -106,6 +112,9 @@ const initialState = {
   isLoadingMore: false,
   hasMore: true,
   currentPage: 1,
+  historyTotal: 0,
+  isLoadingAllHistory: false,
+  historyWindowDays: 30 as HistoryWindowDays,
   selectedReport: null as AnalysisReport | null,
   isLoadingReport: false,
   activeTasks: [] as TaskInfo[],
@@ -118,9 +127,9 @@ const initialState = {
   canAnalyzeBatch: true,
 };
 
-function buildHistoryParams(page: number) {
+function buildHistoryParams(page: number, historyWindowDays: HistoryWindowDays) {
   return {
-    startDate: getRecentStartDate(30),
+    startDate: historyWindowDays == null ? undefined : getRecentStartDate(historyWindowDays),
     endDate: getTodayInShanghai(),
     page,
     limit: PAGE_SIZE,
@@ -154,13 +163,13 @@ async function fetchHistory(
   if (!silent) {
     set(
       reset
-        ? { isLoadingHistory: true, isLoadingMore: false, currentPage: 1 }
+          ? { isLoadingHistory: true, isLoadingMore: false, currentPage: 1, hasMore: true }
         : { isLoadingMore: true },
     );
   }
 
   try {
-    const response = await historyApi.getList(buildHistoryParams(page));
+    const response = await historyApi.getList(buildHistoryParams(page, currentState.historyWindowDays));
     if (requestId !== historyRequestSeq) {
       return null;
     }
@@ -171,15 +180,18 @@ async function fetchHistory(
       if (newItems.length > 0) {
         set({ historyItems: sortHistoryByCreatedAtDesc([...newItems, ...get().historyItems]) });
       }
+      set({ historyTotal: response.total });
     } else if (reset) {
       set({
         historyItems: sortHistoryByCreatedAtDesc(response.items),
         currentPage: 1,
+        historyTotal: response.total,
       });
     } else {
       set({
         historyItems: sortHistoryByCreatedAtDesc([...get().historyItems, ...response.items]),
         currentPage: page,
+        historyTotal: response.total,
       });
     }
 
@@ -254,6 +266,32 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
       return;
     }
     await fetchHistory(get, set, { reset: false });
+  },
+
+  loadAllHistory: async () => {
+    const state = get();
+    if (state.isLoadingAllHistory || state.isLoadingMore || !state.hasMore) {
+      return;
+    }
+    set({ isLoadingAllHistory: true });
+    try {
+      let guard = 0;
+      while (get().hasMore && !get().isLoadingMore && guard < 1000) {
+        // eslint-disable-next-line no-await-in-loop
+        await fetchHistory(get, set, { reset: false });
+        guard += 1;
+      }
+    } finally {
+      set({ isLoadingAllHistory: false });
+    }
+  },
+
+  setHistoryWindowDays: async (days) => {
+    if (get().historyWindowDays === days) {
+      return;
+    }
+    set({ historyWindowDays: days, selectedHistoryIds: [] });
+    await fetchHistory(get, set, { reset: true });
   },
 
   selectHistoryItem: async (recordId) => {

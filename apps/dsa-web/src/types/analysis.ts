@@ -44,6 +44,7 @@ export interface UniverseStockItem {
   listDate?: string;
   actName?: string;
   actEntType?: string;
+  hasAnalyzed?: boolean;
 }
 
 export interface UniverseStockListResponse {

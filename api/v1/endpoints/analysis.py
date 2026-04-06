@@ -71,6 +71,7 @@ from src.utils.data_processing import (
     extract_fundamental_detail_fields,
     extract_board_detail_fields,
 )
+from src.storage import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -640,6 +641,17 @@ def get_a_share_universe_list(
             },
         )
 
+    analyzed_code_set: set[str] = set()
+    try:
+        db = DatabaseManager.get_instance()
+        analyzed_code_set = {
+            _extract_stock_code(code)
+            for code in db.get_analyzed_stock_codes()
+            if _extract_stock_code(code)
+        }
+    except Exception as exc:
+        logger.warning("[analysis] Failed to load analyzed stock code set: %s", exc)
+
     items = [
         UniverseStockItem(
             stock_code=str(item.get("stock_code", "")).strip(),
@@ -653,6 +665,7 @@ def get_a_share_universe_list(
             cnspell=item.get("cnspell"),
             act_name=item.get("act_name"),
             act_ent_type=item.get("act_ent_type"),
+            has_analyzed=_extract_stock_code(str(item.get("stock_code", "")).strip()) in analyzed_code_set,
         )
         for item in entries
         if str(item.get("stock_code", "")).strip()

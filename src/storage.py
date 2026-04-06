@@ -1229,6 +1229,26 @@ class DatabaseManager:
             results = session.execute(data_query).scalars().all()
             
             return list(results), total
+
+    def get_analyzed_stock_codes(self) -> List[str]:
+        """
+        获取历史分析中出现过的全部股票代码（去重）。
+
+        Returns:
+            去重后的股票代码列表（按字母序）
+        """
+        with self.get_session() as session:
+            rows = session.execute(
+                select(func.distinct(AnalysisHistory.code))
+                .where(AnalysisHistory.code.isnot(None))
+            ).scalars().all()
+
+            cleaned = {
+                str(code).strip().upper()
+                for code in rows
+                if code is not None and str(code).strip()
+            }
+            return sorted(cleaned)
     
     def get_analysis_history_by_id(self, record_id: int) -> Optional[AnalysisHistory]:
         """

@@ -20,6 +20,7 @@ type ViewMode = 'list' | 'industry';
 type SectionMode = 'pool' | 'results';
 type TaskInfoStatus = 'pending' | 'processing' | 'completed' | 'failed';
 type PoolQuickFilter = 'all' | 'analyzed';
+type HistoryWindowDays = 30 | 90 | null;
 
 const getOperationBadgeLabel = (advice?: string) => {
   const normalized = advice?.trim();
@@ -34,8 +35,21 @@ const getOperationBadgeLabel = (advice?: string) => {
 const normalizeStockCodeKey = (code?: string) => {
   const raw = (code || '').trim().toUpperCase();
   if (!raw) return '';
-  const [base] = raw.split('.');
-  return base || raw;
+  let normalized = raw;
+  if (normalized.includes('.')) {
+    const [base] = normalized.split('.');
+    normalized = base || normalized;
+  }
+  if (
+    (normalized.startsWith('SH') || normalized.startsWith('SZ') || normalized.startsWith('BJ'))
+    && /^\d{5,6}$/.test(normalized.slice(2))
+  ) {
+    normalized = normalized.slice(2);
+  }
+  if (normalized.startsWith('HK') && /^\d{1,5}$/.test(normalized.slice(2))) {
+    normalized = `HK${normalized.slice(2).padStart(5, '0')}`;
+  }
+  return normalized;
 };
 
 const RecommendationPage: React.FC = () => {
@@ -59,6 +73,7 @@ const RecommendationPage: React.FC = () => {
   const [isPoolPreviewLoading, setIsPoolPreviewLoading] = useState(false);
   const [poolPreviewRecord, setPoolPreviewRecord] = useState<HistoryItem | null>(null);
   const latestSeenRecordIdRef = useRef<number | null>(null);
+  const autoPoolHistoryHydrationTriggeredRef = useRef(false);
 
   const {
     query,
@@ -68,6 +83,10 @@ const RecommendationPage: React.FC = () => {
     isLoadingUniverseStocks,
     selectedUniverseStockCodes,
     historyItems,
+    historyTotal,
+    hasMore,
+    isLoadingMore,
+    isLoadingAllHistory,
     selectedReport,
     isLoadingReport,
     markdownDrawerOpen,
@@ -86,6 +105,10 @@ const RecommendationPage: React.FC = () => {
     clearError,
     loadInitialHistory,
     refreshHistory,
+    loadMoreHistory,
+    loadAllHistory,
+    historyWindowDays,
+    setHistoryWindowDays,
     selectHistoryItem,
     syncTaskCreated,
     syncTaskUpdated,
@@ -103,6 +126,10 @@ const RecommendationPage: React.FC = () => {
       isLoadingUniverseStocks: state.isLoadingUniverseStocks,
       selectedUniverseStockCodes: state.selectedUniverseStockCodes,
       historyItems: state.historyItems,
+      historyTotal: state.historyTotal,
+      hasMore: state.hasMore,
+      isLoadingMore: state.isLoadingMore,
+      isLoadingAllHistory: state.isLoadingAllHistory,
       selectedReport: state.selectedReport,
       isLoadingReport: state.isLoadingReport,
       markdownDrawerOpen: state.markdownDrawerOpen,
@@ -121,6 +148,10 @@ const RecommendationPage: React.FC = () => {
       clearError: state.clearError,
       loadInitialHistory: state.loadInitialHistory,
       refreshHistory: state.refreshHistory,
+      loadMoreHistory: state.loadMoreHistory,
+      loadAllHistory: state.loadAllHistory,
+      historyWindowDays: state.historyWindowDays,
+      setHistoryWindowDays: state.setHistoryWindowDays,
       selectHistoryItem: state.selectHistoryItem,
       syncTaskCreated: state.syncTaskCreated,
       syncTaskUpdated: state.syncTaskUpdated,
@@ -160,20 +191,27 @@ const RecommendationPage: React.FC = () => {
 
   const analyzedStockCodeSet = useMemo(() => {
     const set = new Set<string>();
+    for (const item of universeStocks) {
+      if (item.hasAnalyzed) {
+        const key = normalizeStockCodeKey(item.stockCode);
+        if (key) set.add(key);
+      }
+    }
     for (const item of historyItems) {
       if (item.stockCode) {
-        set.add(item.stockCode);
+        const key = normalizeStockCodeKey(item.stockCode);
+        if (key) set.add(key);
       }
     }
     return set;
-  }, [historyItems]);
+  }, [historyItems, universeStocks]);
 
   const visibleUniverseStocks = useMemo(() => {
     const q = universeKeyword.trim().toLowerCase();
     return universeStocks.filter((item) => {
       const industryMatch = universeIndustryFilters.length === 0 || universeIndustryFilters.includes(item.industry || '');
       const areaMatch = !universeAreaFilter || (item.area || '') === universeAreaFilter;
-      const analyzedMatch = poolQuickFilter === 'all' || analyzedStockCodeSet.has(item.stockCode);
+      const analyzedMatch = poolQuickFilter === 'all' || analyzedStockCodeSet.has(normalizeStockCodeKey(item.stockCode));
       if (!industryMatch || !areaMatch || !analyzedMatch) {
         return false;
       }
@@ -192,9 +230,11 @@ const RecommendationPage: React.FC = () => {
   const universeScoreMap = useMemo(() => {
     const scoreMap = new Map<string, { signalScore?: number; sentimentScore?: number }>();
     for (const item of historyItems) {
-      const existed = scoreMap.get(item.stockCode);
+      const stockKey = normalizeStockCodeKey(item.stockCode);
+      if (!stockKey) continue;
+      const existed = scoreMap.get(stockKey);
       if (!existed) {
-        scoreMap.set(item.stockCode, { signalScore: item.signalScore, sentimentScore: item.sentimentScore });
+        scoreMap.set(stockKey, { signalScore: item.signalScore, sentimentScore: item.sentimentScore });
         continue;
       }
       const currentSignal = item.signalScore ?? -1;
@@ -202,7 +242,7 @@ const RecommendationPage: React.FC = () => {
       const currentSentiment = item.sentimentScore ?? -1;
       const existedSentiment = existed.sentimentScore ?? -1;
       if (currentSignal > existedSignal || (currentSignal === existedSignal && currentSentiment > existedSentiment)) {
-        scoreMap.set(item.stockCode, { signalScore: item.signalScore, sentimentScore: item.sentimentScore });
+        scoreMap.set(stockKey, { signalScore: item.signalScore, sentimentScore: item.sentimentScore });
       }
     }
     return scoreMap;
@@ -218,7 +258,9 @@ const RecommendationPage: React.FC = () => {
       actEntType?: string;
     }>();
     for (const item of universeStocks) {
-      map.set(item.stockCode, {
+      const stockKey = normalizeStockCodeKey(item.stockCode);
+      if (!stockKey) continue;
+      map.set(stockKey, {
         industry: item.industry,
         area: item.area,
         market: item.market,
@@ -233,8 +275,8 @@ const RecommendationPage: React.FC = () => {
   const sortedUniverseStocks = useMemo(() => {
     const items = [...visibleUniverseStocks];
     items.sort((a, b) => {
-      const scoreA = universeScoreMap.get(a.stockCode);
-      const scoreB = universeScoreMap.get(b.stockCode);
+      const scoreA = universeScoreMap.get(normalizeStockCodeKey(a.stockCode));
+      const scoreB = universeScoreMap.get(normalizeStockCodeKey(b.stockCode));
       const signalA = scoreA?.signalScore ?? -1;
       const signalB = scoreB?.signalScore ?? -1;
       const sentimentA = scoreA?.sentimentScore ?? -1;
@@ -283,7 +325,9 @@ const RecommendationPage: React.FC = () => {
   const activeTaskStatusMap = useMemo(() => {
     const map = new Map<string, TaskInfoStatus>();
     for (const task of activeTasks) {
-      map.set(task.stockCode, task.status as TaskInfoStatus);
+      const taskKey = normalizeStockCodeKey(task.stockCode);
+      if (!taskKey) continue;
+      map.set(taskKey, task.status as TaskInfoStatus);
     }
     return map;
   }, [activeTasks]);
@@ -291,15 +335,17 @@ const RecommendationPage: React.FC = () => {
   const latestHistoryByCode = useMemo(() => {
     const map = new Map<string, HistoryItem>();
     for (const item of historyItems) {
-      const existed = map.get(item.stockCode);
+      const stockKey = normalizeStockCodeKey(item.stockCode);
+      if (!stockKey) continue;
+      const existed = map.get(stockKey);
       if (!existed) {
-        map.set(item.stockCode, item);
+        map.set(stockKey, item);
         continue;
       }
       const currentTs = new Date(item.createdAt).getTime();
       const existedTs = new Date(existed.createdAt).getTime();
       if (currentTs > existedTs || (currentTs === existedTs && (item.id ?? 0) > (existed.id ?? 0))) {
-        map.set(item.stockCode, item);
+        map.set(stockKey, item);
       }
     }
     return map;
@@ -338,7 +384,7 @@ const RecommendationPage: React.FC = () => {
 
   const selectedReportWithFallback = useMemo(() => {
     if (!selectedReport) return null;
-    const fallback = universeBasicInfoMap.get(selectedReport.meta.stockCode);
+    const fallback = universeBasicInfoMap.get(normalizeStockCodeKey(selectedReport.meta.stockCode));
     if (!fallback) return selectedReport;
     return {
       ...selectedReport,
@@ -488,6 +534,57 @@ const RecommendationPage: React.FC = () => {
     await selectHistoryItem(latest.id);
   }, [selectHistoryItem, visibleRecommendationResults]);
 
+  const handleChangeHistoryWindow = useCallback((days: HistoryWindowDays) => {
+    void setHistoryWindowDays(days);
+  }, [setHistoryWindowDays]);
+
+  const pendingHistoryDetailCount = useMemo(() => {
+    let count = 0;
+    for (const item of visibleUniverseStocks) {
+      const stockKey = normalizeStockCodeKey(item.stockCode);
+      if (!stockKey) continue;
+      if (item.hasAnalyzed && !latestHistoryByCode.get(stockKey)) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [latestHistoryByCode, visibleUniverseStocks]);
+
+  const handleLoadPoolHistoryDetails = useCallback(async () => {
+    await setHistoryWindowDays(null);
+    await loadAllHistory();
+  }, [loadAllHistory, setHistoryWindowDays]);
+
+  useEffect(() => {
+    // Leave pool mode: allow next auto hydration cycle.
+    if (sectionMode !== 'pool') {
+      autoPoolHistoryHydrationTriggeredRef.current = false;
+      return;
+    }
+    // Already complete: clear trigger so future stale state can re-trigger.
+    if (pendingHistoryDetailCount <= 0) {
+      autoPoolHistoryHydrationTriggeredRef.current = false;
+      return;
+    }
+    // Avoid repeated large-history auto loading loops in one analyzed session.
+    if (autoPoolHistoryHydrationTriggeredRef.current) {
+      return;
+    }
+    // Don't compete with ongoing loading actions.
+    if (isLoadingAllHistory || isLoadingMore) {
+      return;
+    }
+
+    autoPoolHistoryHydrationTriggeredRef.current = true;
+    void handleLoadPoolHistoryDetails();
+  }, [
+    handleLoadPoolHistoryDetails,
+    isLoadingAllHistory,
+    isLoadingMore,
+    pendingHistoryDetailCount,
+    sectionMode,
+  ]);
+
   const pendingCount = activeTasks.filter((task) => task.status === 'pending').length;
   const processingCount = activeTasks.filter((task) => task.status === 'processing').length;
   const formatAnalysisTime = (value?: string) => {
@@ -507,7 +604,8 @@ const RecommendationPage: React.FC = () => {
   };
 
   const resolvePoolBasicInfo = useCallback((stockCode: string, item: (typeof universeStocks)[number]) => {
-    const infoFromPool = universeBasicInfoMap.get(stockCode);
+    const stockKey = normalizeStockCodeKey(stockCode);
+    const infoFromPool = universeBasicInfoMap.get(stockKey);
     if (infoFromPool) {
       if (
         infoFromPool.industry
@@ -520,7 +618,10 @@ const RecommendationPage: React.FC = () => {
         return infoFromPool;
       }
     }
-    if (selectedReportWithFallback?.meta.stockCode === stockCode) {
+    if (
+      selectedReportWithFallback?.meta.stockCode
+      && normalizeStockCodeKey(selectedReportWithFallback.meta.stockCode) === stockKey
+    ) {
       return {
         industry: selectedReportWithFallback.meta.industry,
         area: selectedReportWithFallback.meta.area,
@@ -785,6 +886,22 @@ const RecommendationPage: React.FC = () => {
               </div>
             </div>
 
+            {pendingHistoryDetailCount > 0 ? (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-secondary-text">
+                <span>
+                  当前有 {pendingHistoryDetailCount} 只股票命中“历史已分析”标记，但详情记录尚未加载到本地列表。
+                </span>
+                <button
+                  type="button"
+                  className="rounded-md border border-subtle px-2 py-1 text-xs text-primary hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void handleLoadPoolHistoryDetails()}
+                  disabled={isLoadingAllHistory || isLoadingMore}
+                >
+                  {isLoadingAllHistory ? '正在加载历史详情...' : '加载历史详情'}
+                </button>
+              </div>
+            ) : null}
+
             <div className="max-h-[62vh] overflow-y-auto rounded-lg border border-subtle">
               {isLoadingUniverseStocks ? (
                 <div className="p-6 text-center text-sm text-secondary-text">正在加载全A股票池...</div>
@@ -793,8 +910,10 @@ const RecommendationPage: React.FC = () => {
               ) : viewMode === 'list' ? (
                 <div className="divide-y divide-subtle">
                   {pagedUniverseStocks.map((item) => {
-                    const score = universeScoreMap.get(item.stockCode);
-                    const latestHistory = latestHistoryByCode.get(item.stockCode);
+                    const stockKey = normalizeStockCodeKey(item.stockCode);
+                    const score = universeScoreMap.get(stockKey);
+                    const latestHistory = latestHistoryByCode.get(stockKey);
+                    const hasHistoricalAnalysis = Boolean(latestHistory?.id) || Boolean(item.hasAnalyzed);
                     const basicInfo = resolvePoolBasicInfo(item.stockCode, item);
                     return (
                       <div key={item.stockCode} className="flex items-center gap-3 px-3 py-2 hover:bg-hover/60">
@@ -849,7 +968,13 @@ const RecommendationPage: React.FC = () => {
                             <span>实控类型: {basicInfo.actEntType || '--'}</span>
                           </div>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-secondary-text">
-                            <span>分析时间: {formatAnalysisTime(latestHistory?.createdAt)}</span>
+                            <span>
+                              分析时间: {latestHistory?.createdAt
+                                ? formatAnalysisTime(latestHistory.createdAt)
+                                : hasHistoricalAnalysis
+                                  ? '历史已分析（当前窗口未加载）'
+                                  : '--'}
+                            </span>
                             <button
                               type="button"
                               className={`rounded-md border px-2 py-0.5 ${
@@ -863,7 +988,7 @@ const RecommendationPage: React.FC = () => {
                                 void handleOpenFullReportFromPool(latestHistory);
                               }}
                             >
-                              {latestHistory?.id ? '完整分析报告' : '暂无报告'}
+                              {latestHistory?.id ? '完整分析报告' : hasHistoricalAnalysis ? '历史已分析（切换窗口查看）' : '暂无报告'}
                             </button>
                             <button
                               type="button"
@@ -878,7 +1003,7 @@ const RecommendationPage: React.FC = () => {
                                 void handleOpenPoolPreview(latestHistory);
                               }}
                             >
-                              {latestHistory?.id ? '查看分析结果' : '暂无结果'}
+                              {latestHistory?.id ? '查看分析结果' : hasHistoricalAnalysis ? '历史已分析（切换窗口查看）' : '暂无结果'}
                             </button>
                           </div>
                         </div>
@@ -918,8 +1043,10 @@ const RecommendationPage: React.FC = () => {
                         {expanded ? (
                           <div className="divide-y divide-subtle/70 border-t border-subtle/70">
                             {group.items.map((item) => {
-                              const score = universeScoreMap.get(item.stockCode);
-                              const latestHistory = latestHistoryByCode.get(item.stockCode);
+                              const stockKey = normalizeStockCodeKey(item.stockCode);
+                              const score = universeScoreMap.get(stockKey);
+                              const latestHistory = latestHistoryByCode.get(stockKey);
+                              const hasHistoricalAnalysis = Boolean(latestHistory?.id) || Boolean(item.hasAnalyzed);
                               const basicInfo = resolvePoolBasicInfo(item.stockCode, item);
                               return (
                                 <div key={item.stockCode} className="flex items-center gap-3 px-3 py-2 hover:bg-hover/60">
@@ -974,7 +1101,13 @@ const RecommendationPage: React.FC = () => {
                                       <span>实控类型: {basicInfo.actEntType || '--'}</span>
                                     </div>
                                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-secondary-text">
-                                      <span>分析时间: {formatAnalysisTime(latestHistory?.createdAt)}</span>
+                                      <span>
+                                        分析时间: {latestHistory?.createdAt
+                                          ? formatAnalysisTime(latestHistory.createdAt)
+                                          : hasHistoricalAnalysis
+                                            ? '历史已分析（当前窗口未加载）'
+                                            : '--'}
+                                      </span>
                                       <button
                                         type="button"
                                         className={`rounded-md border px-2 py-0.5 ${
@@ -988,7 +1121,7 @@ const RecommendationPage: React.FC = () => {
                                           void handleOpenFullReportFromPool(latestHistory);
                                         }}
                                       >
-                                        {latestHistory?.id ? '完整分析报告' : '暂无报告'}
+                                        {latestHistory?.id ? '完整分析报告' : hasHistoricalAnalysis ? '历史已分析（切换窗口查看）' : '暂无报告'}
                                       </button>
                                       <button
                                         type="button"
@@ -1003,7 +1136,7 @@ const RecommendationPage: React.FC = () => {
                                           void handleOpenPoolPreview(latestHistory);
                                         }}
                                       >
-                                        {latestHistory?.id ? '查看分析结果' : '暂无结果'}
+                                        {latestHistory?.id ? '查看分析结果' : hasHistoricalAnalysis ? '历史已分析（切换窗口查看）' : '暂无结果'}
                                       </button>
                                     </div>
                                   </div>
@@ -1069,9 +1202,33 @@ const RecommendationPage: React.FC = () => {
               <div className="rounded-lg border border-subtle bg-base/40 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs text-secondary-text">
-                    排队 {pendingCount} | 进行中 {processingCount} | 结果 {visibleRecommendationResults.length}
+                    排队 {pendingCount} | 进行中 {processingCount} | 已加载 {historyItems.length}/{historyTotal}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex items-center gap-1 rounded-md border border-subtle px-1 py-1 text-[11px] text-secondary-text">
+                      <span className="px-1">历史窗口:</span>
+                      <button
+                        type="button"
+                        className={`rounded px-2 py-0.5 ${historyWindowDays === null ? 'bg-primary/15 text-foreground' : 'hover:bg-hover'}`}
+                        onClick={() => handleChangeHistoryWindow(null)}
+                      >
+                        全部
+                      </button>
+                      <button
+                        type="button"
+                        className={`rounded px-2 py-0.5 ${historyWindowDays === 90 ? 'bg-primary/15 text-foreground' : 'hover:bg-hover'}`}
+                        onClick={() => handleChangeHistoryWindow(90)}
+                      >
+                        90天
+                      </button>
+                      <button
+                        type="button"
+                        className={`rounded px-2 py-0.5 ${historyWindowDays === 30 ? 'bg-primary/15 text-foreground' : 'hover:bg-hover'}`}
+                        onClick={() => handleChangeHistoryWindow(30)}
+                      >
+                        30天
+                      </button>
+                    </div>
                     {hasNewCompleted ? (
                       <button
                         type="button"
@@ -1134,9 +1291,9 @@ const RecommendationPage: React.FC = () => {
                     <div className="divide-y divide-subtle">
                       {visibleRecommendationResults.map((item) => {
                         const isSelected = selectedReport?.meta.id === item.id;
-                        const taskStatus = activeTaskStatusMap.get(item.stockCode);
+                        const taskStatus = activeTaskStatusMap.get(normalizeStockCodeKey(item.stockCode));
                         const status = taskStatus ?? 'completed';
-                        const fallback = universeBasicInfoMap.get(item.stockCode);
+                        const fallback = universeBasicInfoMap.get(normalizeStockCodeKey(item.stockCode));
                         return (
                           <div
                             key={`${item.id}-${item.stockCode}`}
@@ -1218,6 +1375,24 @@ const RecommendationPage: React.FC = () => {
                       })}
                     </div>
                   )}
+                </div>
+                <div className="mt-2 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary-text hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => void loadAllHistory()}
+                    disabled={isLoadingAllHistory || isLoadingMore || !hasMore}
+                  >
+                    {isLoadingAllHistory ? '正在加载全部...' : hasMore ? '加载全部历史' : '已全部加载'}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary-text hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => void loadMoreHistory()}
+                    disabled={isLoadingAllHistory || isLoadingMore || !hasMore}
+                  >
+                    {isLoadingMore ? '加载中...' : hasMore ? '加载更多历史' : '已加载全部'}
+                  </button>
                 </div>
               </div>
             </div>

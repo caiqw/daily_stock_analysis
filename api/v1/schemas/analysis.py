@@ -276,6 +276,7 @@ class UniverseStockItem(BaseModel):
     cnspell: Optional[str] = Field(None, description="股票名称拼音缩写")
     act_name: Optional[str] = Field(None, description="实控人名称")
     act_ent_type: Optional[str] = Field(None, description="实控人企业性质")
+    has_analyzed: bool = Field(False, description="是否存在历史分析记录")
 
     class Config:
         json_schema_extra = {
@@ -291,6 +292,7 @@ class UniverseStockItem(BaseModel):
                 "cnspell": "GZMT",
                 "act_name": "贵州省人民政府国有资产监督管理委员会",
                 "act_ent_type": "地方国有企业",
+                "has_analyzed": True,
             }
         }
 
