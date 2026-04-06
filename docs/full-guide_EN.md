@@ -109,6 +109,9 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | Secret Name | Description | Required |
 |------------|------|:----:|
 | `STOCK_LIST` | Watchlist codes, e.g., `600519,300750,002594` | ✅ |
+| `A_SHARE_UNIVERSE_FALLBACK_ENABLED` | For Web "Run All A-shares": allow fallback to a local stock universe file when Tushare fails | Optional (default `true`) |
+| `A_SHARE_UNIVERSE_FALLBACK_FILE` | Fallback universe file path (supports project-relative path, e.g. `./data/stock_list_a.csv`) | Optional |
+| `ANALYSIS_UNIVERSE_CHUNK_SIZE` | Batch size per enqueue chunk for Web "Run All A-shares" (1-100, default 50) | Optional |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) Search API (for news search) | Recommended |
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimaxi.com/) Coding Plan Web Search (structured search results) | Optional |
 | `BOCHA_API_KEYS` | [Bocha Search](https://open.bocha.cn/) Web Search API (Chinese search optimized, supports AI summaries, multiple keys comma-separated) | Optional |
@@ -146,6 +149,13 @@ To get started quickly, you need at minimum:
 ### 5. Done!
 
 Default schedule: Every weekday at **18:00 (Beijing Time)** automatic execution.
+
+### Web Manual Trigger for All A-shares
+
+- The Home page now provides a **Run All A-shares** button.
+- After confirmation, the frontend calls `POST /api/v1/analysis/analyze-universe`.
+- Backend loads the universe with **Tushare first, local file fallback**, then submits async tasks in chunks using `ANALYSIS_UNIVERSE_CHUNK_SIZE`.
+- History list now defaults to sorting by `sentiment_score` (descending) and also exposes `signal_score`.
 
 ---
 
@@ -266,12 +276,19 @@ Default schedule: Every weekday at **18:00 (Beijing Time)** automatic execution.
 | Variable | Description | Default |
 |--------|------|--------|
 | `STOCK_LIST` | Watchlist codes (comma-separated) | - |
+| `A_SHARE_UNIVERSE_FALLBACK_ENABLED` | Enable local fallback file for all A-share trigger | `true` |
+| `A_SHARE_UNIVERSE_FALLBACK_FILE` | Fallback universe file path | `./data/stock_list_a.csv` |
+| `ANALYSIS_UNIVERSE_CHUNK_SIZE` | Chunk size for all A-share task submission (1-100) | `50` |
+| `ADMIN_AUTH_ENABLED` | Web login protection switch. Set `true` to require login. First-time setup initializes the super-admin password in Web UI; reset via `python -m src.auth reset_password` | `false` |
+| `TRUST_X_FORWARDED_FOR` | Set `true` only behind a single trusted reverse proxy. Uses right-most `X-Forwarded-For` value for auth rate limit client IP | `false` |
 | `MAX_WORKERS` | Concurrent threads | `3` |
 | `MARKET_REVIEW_ENABLED` | Enable market review | `true` |
 | `MARKET_REVIEW_REGION` | Market review region: cn (A-shares), us (US stocks), both | `cn` |
 | `SCHEDULE_ENABLED` | Enable scheduled tasks | `false` |
 | `SCHEDULE_TIME` | Scheduled execution time | `18:00` |
 | `LOG_DIR` | Log directory | `./logs` |
+
+> Role split note: initialize or reset the viewer password on server with `python -m src.auth reset_viewer_password` (hashed file storage, no plaintext `.env` entry).
 
 > Behavior notes:
 > - When `TICKFLOW_API_KEY` is configured, CN market review first tries TickFlow for main indices. Market breadth also tries TickFlow only when the current TickFlow plan supports universe queries.

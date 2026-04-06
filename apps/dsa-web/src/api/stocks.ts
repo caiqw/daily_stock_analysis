@@ -1,4 +1,6 @@
 import apiClient from './index';
+import type { StockCompanyInsightsResponse, StockHistoryResponse, StockQuote } from '../types/analysis';
+import { toCamelCase } from './utils';
 
 export type ExtractItem = {
   code?: string | null;
@@ -50,5 +52,28 @@ export const stocksApi = {
       return { codes: data.codes ?? [], items: data.items };
     }
     throw new Error('请提供文件或粘贴文本');
+  },
+
+  async getQuote(stockCode: string): Promise<StockQuote> {
+    const response = await apiClient.get<Record<string, unknown>>(`/api/v1/stocks/${encodeURIComponent(stockCode)}/quote`);
+    return toCamelCase<StockQuote>(response.data);
+  },
+
+  async getHistory(
+    stockCode: string,
+    period: 'daily' | 'weekly' | 'monthly' = 'daily',
+    days = 120,
+  ): Promise<StockHistoryResponse> {
+    const response = await apiClient.get<Record<string, unknown>>(`/api/v1/stocks/${encodeURIComponent(stockCode)}/history`, {
+      params: { period, days },
+    });
+    return toCamelCase<StockHistoryResponse>(response.data);
+  },
+
+  async getInsights(stockCode: string): Promise<StockCompanyInsightsResponse> {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/stocks/${encodeURIComponent(stockCode)}/insights`,
+    );
+    return toCamelCase<StockCompanyInsightsResponse>(response.data);
   },
 };

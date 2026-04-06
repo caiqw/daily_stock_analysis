@@ -17,6 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 
 from api.v1.schemas.stocks import (
+    StockCompanyInsightsResponse,
     ExtractFromImageResponse,
     ExtractItem,
     KLineData,
@@ -292,7 +293,11 @@ def get_stock_quote(stock_code: str) -> StockQuote:
             prev_close=result.get("prev_close"),
             volume=result.get("volume"),
             amount=result.get("amount"),
-            update_time=result.get("update_time")
+            update_time=result.get("update_time"),
+            pe_ratio=result.get("pe_ratio"),
+            pb_ratio=result.get("pb_ratio"),
+            total_mv=result.get("total_mv"),
+            circ_mv=result.get("circ_mv"),
         )
         
     except HTTPException:
@@ -304,6 +309,35 @@ def get_stock_quote(stock_code: str) -> StockQuote:
             detail={
                 "error": "internal_error",
                 "message": f"获取实时行情失败: {str(e)}"
+            }
+        )
+
+
+@router.get(
+    "/{stock_code}/insights",
+    response_model=StockCompanyInsightsResponse,
+    responses={
+        200: {"description": "公司信息与财务指标"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取公司信息与财务指标",
+    description="聚合公司介绍、主营业务与关键财务指标（估值/盈利/现金流等）",
+)
+def get_stock_company_insights(stock_code: str) -> StockCompanyInsightsResponse:
+    """
+    获取公司信息与财务指标（失败降级，不阻断）
+    """
+    try:
+        service = StockService()
+        payload = service.get_company_insights(stock_code)
+        return StockCompanyInsightsResponse(**payload)
+    except Exception as e:
+        logger.error(f"获取公司信息与财务指标失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": f"获取公司信息与财务指标失败: {str(e)}"
             }
         )
 

@@ -43,6 +43,7 @@ export const HistoryListItem: React.FC<HistoryListItemProps> = ({
   onClick,
 }) => {
   const sentimentColor = item.sentimentScore !== undefined ? getSentimentColor(item.sentimentScore) : null;
+  const signalColor = item.signalScore !== undefined ? getSentimentColor(item.signalScore) : null;
   const stockName = item.stockName || item.stockCode;
   const isTruncated = isStockNameTruncated(stockName);
 
@@ -86,20 +87,36 @@ export const HistoryListItem: React.FC<HistoryListItemProps> = ({
                   </span>
                 </span>
               </div>
-              {sentimentColor && (
-                <Badge
-                  variant="default"
-                  size="sm"
-                  className={`home-history-sentiment-badge shrink-0 shadow-none text-[11px] font-semibold leading-none transition-opacity duration-200${isTruncated ? ' group-hover/item:opacity-80' : ''}`}
-                  style={{
-                    color: sentimentColor,
-                    borderColor: `${sentimentColor}30`,
-                    backgroundColor: `${sentimentColor}10`,
-                  }}
-                >
-                  {getOperationBadgeLabel(item.operationAdvice)} {item.sentimentScore}
-                </Badge>
-              )}
+              <div className="flex shrink-0 items-center gap-1.5">
+                {sentimentColor && (
+                  <Badge
+                    variant="default"
+                    size="sm"
+                    className={`home-history-sentiment-badge shadow-none text-[11px] font-semibold leading-none transition-opacity duration-200${isTruncated ? ' group-hover/item:opacity-80' : ''}`}
+                    style={{
+                      color: sentimentColor,
+                      borderColor: `${sentimentColor}30`,
+                      backgroundColor: `${sentimentColor}10`,
+                    }}
+                  >
+                    {getOperationBadgeLabel(item.operationAdvice)} {item.sentimentScore}
+                  </Badge>
+                )}
+                {signalColor && (
+                  <Badge
+                    variant="default"
+                    size="sm"
+                    className={`home-history-sentiment-badge shadow-none text-[11px] font-semibold leading-none transition-opacity duration-200${isTruncated ? ' group-hover/item:opacity-80' : ''}`}
+                    style={{
+                      color: signalColor,
+                      borderColor: `${signalColor}30`,
+                      backgroundColor: `${signalColor}10`,
+                    }}
+                  >
+                    信号 {item.signalScore}
+                  </Badge>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-[11px] text-secondary-text font-mono">

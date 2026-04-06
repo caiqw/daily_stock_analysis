@@ -14,7 +14,9 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # Keep this test runnable when optional LLM runtime deps are not installed.
@@ -542,6 +544,42 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(report.summary.trend_prediction, "Bullish")
         self.assertEqual(report.summary.sentiment_label, "Bullish")
 
+    @patch("api.v1.endpoints.history._resolve_stock_basic_info")
+    def test_history_detail_includes_business_basic_info(self, mock_resolve_basic_info) -> None:
+        """History detail should include industry/area/list_date style business fields."""
+        if get_history_detail is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        mock_resolve_basic_info.return_value = {
+            "industry": "白酒",
+            "area": "贵州",
+            "market": "主板",
+            "list_date": "20010827",
+        }
+
+        result = self._build_result()
+        saved = self.db.save_analysis_history(
+            result=result,
+            query_id="query_basic_info_001",
+            report_type="simple",
+            news_content="新闻摘要",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.assertEqual(saved, 1)
+
+        with self.db.get_session() as session:
+            row = session.query(AnalysisHistory).filter(AnalysisHistory.query_id == "query_basic_info_001").first()
+            if row is None:
+                self.fail("未找到保存的历史记录")
+            record_id = row.id
+
+        report = get_history_detail(str(record_id), db_manager=self.db)
+        self.assertEqual(report.meta.industry, "白酒")
+        self.assertEqual(report.meta.area, "贵州")
+        self.assertEqual(report.meta.market, "主板")
+        self.assertEqual(report.meta.list_date, "20010827")
+
     def test_history_markdown_uses_safe_bias_emoji_for_english_status(self) -> None:
         """English bias status should keep the correct non-risk emoji in markdown."""
         result = AnalysisResult(
@@ -615,6 +653,112 @@ class AnalysisHistoryTestCase(unittest.TestCase):
                 session.query(BacktestResult).filter(BacktestResult.analysis_history_id == record_id).count(),
                 0,
             )
+
+    def test_history_list_sorts_by_created_time_then_scores_and_exposes_scores(self) -> None:
+        """历史列表应优先按 created_at 降序，分数作为次级排序。"""
+        cases = [
+            ("query_sort_001", 95, 65),  # high sentiment but lower signal
+            ("query_sort_002", 88, 76),  # highest signal
+            ("query_sort_003", 67, 76),  # tie signal; lower sentiment than query_sort_002
+        ]
+
+        for query_id, sentiment_score, trend_score in cases:
+            result = self._build_result()
+            result.sentiment_score = sentiment_score
+            result.dashboard = {
+                "data_perspective": {
+                    "trend_status": {
+                        "trend_score": trend_score,
+                    }
+                }
+            }
+            saved = self.db.save_analysis_history(
+                result=result,
+                query_id=query_id,
+                report_type="simple",
+                news_content="新闻摘要",
+                context_snapshot=None,
+                save_snapshot=False,
+            )
+            self.assertEqual(saved, 1)
+
+        # 故意把高 signal 记录时间调早，验证 created_at 是主排序键
+        with self.db.get_session() as session:
+            rows = session.query(AnalysisHistory).filter(
+                AnalysisHistory.query_id.in_([item[0] for item in cases])
+            ).all()
+            now = datetime.now()
+            for row in rows:
+                if row.query_id == "query_sort_002":
+                    row.created_at = now - timedelta(hours=3)
+                else:
+                    row.created_at = now
+            session.commit()
+
+        service = HistoryService(self.db)
+        response = service.get_history_list(page=1, limit=10)
+        items = [item for item in response["items"] if item["query_id"] in {case[0] for case in cases}]
+
+        self.assertEqual(
+            [item["query_id"] for item in items[:3]],
+            ["query_sort_003", "query_sort_001", "query_sort_002"],
+        )
+        # 同一 created_at 场景下，仍按 signal_score / sentiment_score 次级排序
+        self.assertEqual(items[0]["signal_score"], 76)
+        self.assertEqual(items[1]["signal_score"], 65)
+        self.assertEqual(items[2]["signal_score"], 76)
+        self.assertGreater(items[0]["sentiment_score"], items[1]["sentiment_score"])
+
+    @patch("src.services.history_service.requests.get")
+    def test_resolve_and_get_news_uses_rss_fallback_when_db_news_empty(self, mock_get) -> None:
+        service = HistoryService(self.db)
+        fake_record = SimpleNamespace(query_id="q_rss_001", code="600519", name="贵州茅台")
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.text = (
+            "<?xml version='1.0' encoding='UTF-8'?>"
+            "<rss><channel>"
+            "<item><title>茅台发布年报</title><link>https://example.com/news-1</link>"
+            "<description><![CDATA[<p>营收稳步增长</p>]]></description></item>"
+            "<item><title>白酒板块异动</title><link>https://example.com/news-2</link>"
+            "<description><![CDATA[<p>资金关注度提升</p>]]></description></item>"
+            "</channel></rss>"
+        )
+
+        with patch.object(service, "_resolve_record", return_value=fake_record), \
+             patch.object(service, "get_news_intel", return_value=[]):
+            items = service.resolve_and_get_news("1", limit=2)
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["title"], "茅台发布年报")
+        self.assertEqual(items[1]["title"], "白酒板块异动")
+        self.assertTrue(mock_get.called)
+
+    @patch("src.services.history_service.requests.get")
+    def test_resolve_and_get_news_skips_rss_when_db_news_available(self, mock_get) -> None:
+        service = HistoryService(self.db)
+        fake_record = SimpleNamespace(query_id="q_rss_002", code="600519", name="贵州茅台")
+        existing = [{"title": "库内新闻", "snippet": "来自数据库", "url": "https://example.com/db"}]
+
+        with patch.object(service, "_resolve_record", return_value=fake_record), \
+             patch.object(service, "get_news_intel", return_value=existing):
+            items = service.resolve_and_get_news("2", limit=5)
+
+        self.assertEqual(items, existing)
+        mock_get.assert_not_called()
+
+    @patch("src.services.history_service.requests.get")
+    def test_rss_fallback_caps_query_count_and_timeout(self, mock_get) -> None:
+        service = HistoryService(self.db)
+        mock_get.return_value.status_code = 503
+        mock_get.return_value.text = ""
+
+        items = service._fetch_live_news_fallback("600519", "贵州茅台", limit=5)
+
+        self.assertEqual(items, [])
+        self.assertLessEqual(mock_get.call_count, 2)
+        for call in mock_get.call_args_list:
+            self.assertIn("timeout", call.kwargs)
+            self.assertLessEqual(float(call.kwargs["timeout"]), 2.5)
 
     @patch("src.auth.is_auth_enabled", return_value=False)
     def test_delete_history_api_deletes_selected_records(self, mock_auth) -> None:

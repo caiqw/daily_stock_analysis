@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { analysisApi, DuplicateTaskError } from '../../api/analysis';
 import { historyApi } from '../../api/history';
+import { stocksApi } from '../../api/stocks';
 import { useStockPoolStore } from '../../stores';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 import HomePage from '../HomePage';
@@ -33,12 +34,34 @@ vi.mock('../../api/analysis', async () => {
     ...actual,
     analysisApi: {
       analyzeAsync: vi.fn(),
+      getUniverseStocks: vi.fn(),
     },
   };
 });
 
 vi.mock('../../hooks/useTaskStream', () => ({
   useTaskStream: vi.fn(),
+}));
+
+vi.mock('../../api/stocks', () => ({
+  stocksApi: {
+    getInsights: vi.fn().mockResolvedValue({
+      stockCode: '600519',
+      profile: {
+        stockCode: '600519',
+        stockName: '贵州茅台',
+        companyName: '贵州茅台',
+        companyIntro: '公司介绍',
+        mainBusiness: '主营业务',
+        businessScope: '业务范围',
+      },
+      financialMetrics: {
+        stockCode: '600519',
+        peRatio: 18.2,
+        pbRatio: 3.8,
+      },
+    }),
+  },
 }));
 
 const historyItem = {
@@ -72,6 +95,22 @@ const historyReport = {
 describe('HomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(stocksApi.getInsights).mockResolvedValue({
+      stockCode: '600519',
+      profile: {
+        stockCode: '600519',
+        stockName: '贵州茅台',
+        companyName: '贵州茅台',
+        companyIntro: '公司介绍',
+        mainBusiness: '主营业务',
+        businessScope: '业务范围',
+      },
+      financialMetrics: {
+        stockCode: '600519',
+        peRatio: 18.2,
+        pbRatio: 3.8,
+      },
+    });
     navigateMock.mockReset();
     useStockPoolStore.getState().resetDashboardState();
   });
@@ -103,6 +142,7 @@ describe('HomePage', () => {
     expect(dashboard.querySelector('.flex-1.flex.min-h-0.overflow-hidden')).toBeTruthy();
     expect(screen.getByPlaceholderText('输入股票代码或名称，如 600519、贵州茅台、AAPL')).toBeInTheDocument();
     expect(await screen.findByText('趋势维持强势')).toBeInTheDocument();
+    expect(await screen.findByText('公司介绍')).toBeInTheDocument();
     expect(
       screen.getByRole('button', {
         name: getReportText(normalizeReportLanguage(historyReport.meta.reportLanguage)).fullReport,
@@ -274,4 +314,5 @@ describe('HomePage', () => {
     expect(await screen.findByText('分析任务')).toBeInTheDocument();
     expect(screen.getByText('正在抓取最新行情')).toBeInTheDocument();
   });
+
 });

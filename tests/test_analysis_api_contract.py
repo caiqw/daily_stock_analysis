@@ -18,12 +18,16 @@ try:
     from api.app import create_app
     from api.v1.endpoints.analysis import (
         trigger_analysis,
+        trigger_universe_analysis,
+        get_a_share_universe_list,
         _build_analysis_report,
         _load_sync_fundamental_sources,
     )
 except Exception:  # pragma: no cover - optional dependency environments
     create_app = None
     trigger_analysis = None
+    trigger_universe_analysis = None
+    get_a_share_universe_list = None
     _build_analysis_report = None
     _load_sync_fundamental_sources = None
 
@@ -344,6 +348,57 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             ctx.exception.detail["message"],
             "股票代码不能为空或仅包含空白字符",
         )
+
+    def test_trigger_analysis_rejects_general_batch_over_50(self) -> None:
+        if trigger_analysis is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        oversized = [f"600{idx:03d}" for idx in range(51)]
+        with self.assertRaises(Exception) as ctx:
+            trigger_analysis(
+                request=SimpleNamespace(
+                    stock_code=None,
+                    stock_codes=oversized,
+                    report_type="detailed",
+                    force_refresh=False,
+                    async_mode=True,
+                    selection_source="manual",
+                    original_query="manual:oversized",
+                ),
+                config=SimpleNamespace(),
+            )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["message"], "单次分析请求最多支持 50 只股票")
+
+    def test_trigger_analysis_allows_recommendation_selected_batch_over_50(self) -> None:
+        if trigger_analysis is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        queue = MagicMock()
+        queue.submit_tasks_batch.return_value = ([], [])
+        oversized = [f"600{idx:03d}" for idx in range(80)]
+
+        with patch("api.v1.endpoints.analysis.get_task_queue", return_value=queue):
+            response = trigger_analysis(
+                request=SimpleNamespace(
+                    stock_code=None,
+                    stock_codes=oversized,
+                    report_type="detailed",
+                    force_refresh=False,
+                    async_mode=True,
+                    selection_source="import",
+                    original_query="universe:a_share:selected",
+                    stock_name=None,
+                    notify=True,
+                ),
+                config=SimpleNamespace(),
+            )
+
+        self.assertEqual(response.status_code, 202)
+        queue.submit_tasks_batch.assert_called_once()
+        submitted_codes = queue.submit_tasks_batch.call_args.kwargs["stock_codes"]
+        self.assertEqual(len(submitted_codes), 80)
 
     def test_trigger_analysis_rejects_obviously_invalid_mixed_input_before_resolution(self) -> None:
         if trigger_analysis is None:
@@ -687,6 +742,95 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             force_refresh=False,
             notify=True,
         )
+
+    def test_trigger_universe_analysis_submits_chunks_and_returns_summary(self) -> None:
+        if trigger_universe_analysis is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        class QueueStub:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def submit_tasks_batch(self, **kwargs):
+                self.calls.append(kwargs)
+                accepted = [
+                    SimpleNamespace(task_id=f"task_{code}", stock_code=code)
+                    for code in kwargs["stock_codes"]
+                ]
+                return accepted, []
+
+        stock_codes = [f"600{idx:03d}" for idx in range(120)]
+        queue_stub = QueueStub()
+        with patch("api.v1.endpoints.analysis._load_all_a_share_codes", return_value=(stock_codes, "tushare")), \
+             patch("api.v1.endpoints.analysis.get_task_queue", return_value=queue_stub):
+            response = trigger_universe_analysis(
+                request=SimpleNamespace(universe="a_share", notify=False, chunk_size=50),
+                config=SimpleNamespace(analysis_universe_chunk_size=50),
+            )
+
+        self.assertEqual(response.status_code, 202)
+        payload = json.loads(response.body)
+        self.assertEqual(payload["total_symbols"], 120)
+        self.assertEqual(payload["chunk_size"], 50)
+        self.assertEqual(payload["chunk_count"], 3)
+        self.assertEqual(payload["submitted_tasks"], 120)
+        self.assertEqual(payload["duplicate_tasks"], 0)
+        self.assertEqual(payload["source"], "tushare")
+        self.assertEqual(len(payload["sample_task_ids"]), 10)
+        self.assertEqual(len(queue_stub.calls), 3)
+        self.assertEqual(queue_stub.calls[0]["selection_source"], "import")
+        self.assertEqual(queue_stub.calls[0]["notify"], False)
+
+    def test_trigger_universe_analysis_raises_when_universe_unavailable(self) -> None:
+        if trigger_universe_analysis is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        with patch("api.v1.endpoints.analysis._load_all_a_share_codes", return_value=([], "none")):
+            with self.assertRaises(Exception) as ctx:
+                trigger_universe_analysis(
+                    request=SimpleNamespace(universe="a_share", notify=True, chunk_size=50),
+                    config=SimpleNamespace(analysis_universe_chunk_size=50),
+                )
+
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(ctx.exception.detail["error"], "universe_unavailable")
+
+    def test_get_a_share_universe_list_returns_stock_codes_and_names(self) -> None:
+        if get_a_share_universe_list is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        entries = [
+            {
+                "stock_code": "600519",
+                "stock_name": "贵州茅台",
+                "area": "贵州",
+                "industry": "白酒",
+                "market": "主板",
+                "list_date": "20010827",
+            },
+            {"stock_code": "000001", "stock_name": "平安银行"},
+        ]
+        with patch("api.v1.endpoints.analysis._load_all_a_share_entries", return_value=(entries, "tushare")):
+            response = get_a_share_universe_list(config=SimpleNamespace())
+
+        self.assertEqual(response.universe, "a_share")
+        self.assertEqual(response.source, "tushare")
+        self.assertEqual(response.total_symbols, 2)
+        self.assertEqual(response.items[0].stock_code, "600519")
+        self.assertEqual(response.items[0].stock_name, "贵州茅台")
+        self.assertEqual(response.items[0].industry, "白酒")
+        self.assertEqual(response.items[0].area, "贵州")
+
+    def test_get_a_share_universe_list_raises_when_universe_unavailable(self) -> None:
+        if get_a_share_universe_list is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        with patch("api.v1.endpoints.analysis._load_all_a_share_entries", return_value=([], "none")):
+            with self.assertRaises(Exception) as ctx:
+                get_a_share_universe_list(config=SimpleNamespace())
+
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(ctx.exception.detail["error"], "universe_unavailable")
 
     def test_spa_fallback_returns_json_404_for_bare_api_path(self) -> None:
         if create_app is None:

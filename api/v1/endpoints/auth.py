@@ -13,21 +13,28 @@ from pydantic import BaseModel, Field
 from api.deps import get_system_config_service
 from src.auth import (
     COOKIE_NAME,
+    ROLE_SUPER_ADMIN,
+    ROLE_VIEWER,
     SESSION_MAX_AGE_HOURS_DEFAULT,
     change_password,
     check_rate_limit,
     clear_rate_limit,
     create_session,
+    get_role_capabilities,
     get_client_ip,
     has_stored_password,
+    has_viewer_password,
     is_auth_enabled,
     is_password_changeable,
     is_password_set,
+    parse_session,
     record_login_failure,
     refresh_auth_state,
     rotate_session_secret,
     set_initial_password,
+    set_viewer_password,
     verify_password,
+    verify_viewer_password,
     verify_stored_password,
     verify_session,
 )
@@ -46,6 +53,7 @@ class LoginRequest(BaseModel):
 
     password: str = Field(default="", description="Admin password")
     password_confirm: str | None = Field(default=None, alias="passwordConfirm", description="Confirm (first-time)")
+    role: str | None = Field(default=None, description="Optional target role: super_admin/viewer")
 
 
 class ChangePasswordRequest(BaseModel):
@@ -54,6 +62,8 @@ class ChangePasswordRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
     current_password: str = Field(default="", alias="currentPassword")
+    viewer_password: str = Field(default="", alias="viewerPassword")
+    viewer_password_confirm: str | None = Field(default=None, alias="viewerPasswordConfirm")
     new_password: str = Field(default="", alias="newPassword")
     new_password_confirm: str = Field(default="", alias="newPasswordConfirm")
 
@@ -158,9 +168,12 @@ def _get_auth_status_dict(request: Request | None = None) -> dict:
     """Helper to build consistent auth status response body."""
     auth_enabled = is_auth_enabled()
     logged_in = False
+    role: str | None = None
     if auth_enabled and request:
         cookie_val = request.cookies.get(COOKIE_NAME)
-        logged_in = verify_session(cookie_val) if cookie_val else False
+        session_payload = parse_session(cookie_val) if cookie_val else None
+        logged_in = session_payload is not None
+        role = session_payload["role"] if session_payload else None
 
     # setupState determination:
     # - enabled: auth is active
@@ -173,10 +186,15 @@ def _get_auth_status_dict(request: Request | None = None) -> dict:
     else:
         setup_state = "no_password"
 
+    capability_role = ROLE_SUPER_ADMIN if not auth_enabled else role
+
     return {
         "authEnabled": auth_enabled,
         "loggedIn": logged_in,
+        "role": role,
+        "capabilities": get_role_capabilities(capability_role),
         "passwordSet": _password_set_for_response(auth_enabled),
+        "viewerPasswordSet": has_viewer_password() if auth_enabled else False,
         "passwordChangeable": is_password_changeable() if auth_enabled else False,
         "setupState": setup_state,
     }
@@ -203,6 +221,17 @@ async def auth_status(request: Request):
 )
 async def auth_update_settings(request: Request, body: AuthSettingsRequest):
     """Manage auth enablement from the settings page."""
+    if is_auth_enabled():
+        session_info = parse_session(request.cookies.get(COOKIE_NAME) or "")
+        if session_info and session_info["role"] != ROLE_SUPER_ADMIN:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "forbidden",
+                    "message": "仅超级管理员可以修改认证设置",
+                },
+            )
+
     target_enabled = body.auth_enabled
     current_enabled = is_auth_enabled()
     stored_password_exists = has_stored_password()
@@ -210,6 +239,21 @@ async def auth_update_settings(request: Request, body: AuthSettingsRequest):
     password = (body.password or "").strip()
     confirm = (body.password_confirm or "").strip()
     current_password = (body.current_password or "").strip()
+    viewer_password = (body.viewer_password or "").strip()
+    viewer_confirm = (body.viewer_password_confirm or "").strip()
+
+    if viewer_password or viewer_confirm:
+        if viewer_password != viewer_confirm:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "viewer_password_mismatch", "message": "普通用户两次输入的密码不一致"},
+            )
+        viewer_err = set_viewer_password(viewer_password)
+        if viewer_err:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_viewer_password", "message": viewer_err},
+            )
 
     if target_enabled:
         if password or confirm:
@@ -384,9 +428,33 @@ async def auth_login(request: Request, body: LoginRequest):
             },
         )
 
-    password_set = is_password_set()
+    requested_role = (body.role or "").strip().lower()
+    if requested_role and requested_role not in {ROLE_SUPER_ADMIN, ROLE_VIEWER}:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "validation_error", "message": "不支持的登录角色"},
+        )
 
-    if not password_set:
+    password_set = is_password_set()
+    admin_valid = False
+    viewer_valid = False
+    login_role = ROLE_SUPER_ADMIN
+
+    if requested_role == ROLE_VIEWER:
+        if not has_viewer_password():
+            return JSONResponse(
+                status_code=400,
+                content={"error": "viewer_password_not_set", "message": "普通用户密码尚未设置"},
+            )
+        if not verify_viewer_password(password):
+            record_login_failure(ip)
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_password", "message": "密码错误"},
+            )
+        viewer_valid = True
+        login_role = ROLE_VIEWER
+    elif not password_set:
         # First-time setup: require passwordConfirm
         confirm = (body.password_confirm or "").strip()
         if password != confirm:
@@ -402,16 +470,23 @@ async def auth_login(request: Request, body: LoginRequest):
                 status_code=400,
                 content={"error": "invalid_password", "message": err},
             )
+        admin_valid = True
+        login_role = ROLE_SUPER_ADMIN
     else:
-        if not verify_password(password):
+        admin_valid = verify_password(password)
+        viewer_valid = has_viewer_password() and verify_viewer_password(password)
+        if requested_role == ROLE_SUPER_ADMIN:
+            viewer_valid = False
+        if not admin_valid and not viewer_valid:
             record_login_failure(ip)
             return JSONResponse(
                 status_code=401,
                 content={"error": "invalid_password", "message": "密码错误"},
             )
+        login_role = ROLE_SUPER_ADMIN if admin_valid else ROLE_VIEWER
 
     clear_rate_limit(ip)
-    session_val = create_session()
+    session_val = create_session(role=login_role)
     if not session_val:
         return JSONResponse(
             status_code=500,

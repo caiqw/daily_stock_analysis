@@ -18,7 +18,7 @@ import secrets
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TypedDict
 
 from dotenv import dotenv_values
 
@@ -31,11 +31,28 @@ RATE_LIMIT_MAX_FAILURES = 5
 SESSION_MAX_AGE_HOURS_DEFAULT = 24
 MIN_PASSWORD_LEN = 6
 
+ROLE_SUPER_ADMIN = "super_admin"
+ROLE_VIEWER = "viewer"
+ROLE_VALUES = {ROLE_SUPER_ADMIN, ROLE_VIEWER}
+
+RoleCapabilities = TypedDict(
+    "RoleCapabilities",
+    {
+        "canAccessSettings": bool,
+        "canUseTheme": bool,
+        "canAnalyzeHome": bool,
+        "canAnalyzeRecommendation": bool,
+        "canAnalyzeBatch": bool,
+    },
+)
+
 # Lazy-loaded state
 _auth_enabled: Optional[bool] = None
 _session_secret: Optional[bytes] = None
 _password_hash_salt: Optional[bytes] = None
 _password_hash_stored: Optional[bytes] = None
+_viewer_password_hash_salt: Optional[bytes] = None
+_viewer_password_hash_stored: Optional[bytes] = None
 _rate_limit: dict[str, Tuple[int, float]] = {}
 _rate_limit_lock = None
 
@@ -64,6 +81,11 @@ def _get_data_dir() -> Path:
 def _get_credential_path() -> Path:
     """Path to stored password hash file."""
     return _get_data_dir() / ".admin_password_hash"
+
+
+def _get_viewer_credential_path() -> Path:
+    """Path to stored viewer password hash file."""
+    return _get_data_dir() / ".viewer_password_hash"
 
 
 def _is_auth_enabled_from_env() -> bool:
@@ -163,27 +185,44 @@ def _verify_password_hash(submitted: str, salt: bytes, stored_hash: bytes) -> bo
     return hmac.compare_digest(computed, stored_hash)
 
 
-def _load_credential_from_file() -> bool:
-    """Load credential from file into module globals. Returns True if loaded."""
-    global _password_hash_salt, _password_hash_stored
-
-    path = _get_credential_path()
+def _load_credential(path: Path) -> Optional[Tuple[bytes, bytes]]:
     if not path.exists():
-        _password_hash_salt = None
-        _password_hash_stored = None
-        return False
+        return None
 
     try:
         raw = path.read_text().strip()
         parsed = _parse_password_hash(raw)
         if parsed is None:
-            logger.warning("Invalid .admin_password_hash format, ignoring")
-            return False
-        _password_hash_salt, _password_hash_stored = parsed
-        return True
+            logger.warning("Invalid credential hash format for %s, ignoring", path)
+            return None
+        return parsed
     except OSError as e:
         logger.error("Failed to read credential file: %s", e)
+        return None
+
+
+def _load_credential_from_file() -> bool:
+    """Load super-admin credential from file into module globals. Returns True if loaded."""
+    global _password_hash_salt, _password_hash_stored
+    parsed = _load_credential(_get_credential_path())
+    if parsed is None:
+        _password_hash_salt = None
+        _password_hash_stored = None
         return False
+    _password_hash_salt, _password_hash_stored = parsed
+    return True
+
+
+def _load_viewer_credential_from_file() -> bool:
+    """Load viewer credential from file into module globals. Returns True if loaded."""
+    global _viewer_password_hash_salt, _viewer_password_hash_stored
+    parsed = _load_credential(_get_viewer_credential_path())
+    if parsed is None:
+        _viewer_password_hash_salt = None
+        _viewer_password_hash_stored = None
+        return False
+    _viewer_password_hash_salt, _viewer_password_hash_stored = parsed
+    return True
 
 
 def refresh_auth_state() -> None:
@@ -192,6 +231,7 @@ def refresh_auth_state() -> None:
     _auth_enabled = None
     _session_secret = None
     _load_credential_from_file()
+    _load_viewer_credential_from_file()
 
 
 def is_auth_enabled() -> bool:
@@ -208,11 +248,23 @@ def has_stored_password() -> bool:
     return _load_credential_from_file()
 
 
+def has_viewer_password() -> bool:
+    """Return whether a valid viewer password hash exists on disk."""
+    return _load_viewer_credential_from_file()
+
+
 def verify_stored_password(password: str) -> bool:
     """Verify password against stored credential even when auth is disabled."""
     if not has_stored_password():
         return False
     return _verify_password_hash(password, _password_hash_salt, _password_hash_stored)
+
+
+def verify_viewer_password(password: str) -> bool:
+    """Verify password against stored viewer credential."""
+    if not has_viewer_password():
+        return False
+    return _verify_password_hash(password, _viewer_password_hash_salt, _viewer_password_hash_stored)
 
 
 def is_password_set() -> bool:
@@ -279,6 +331,40 @@ def set_initial_password(password: str) -> Optional[str]:
         return "密码保存失败"
 
 
+def set_viewer_password(password: str) -> Optional[str]:
+    """
+    Set or overwrite viewer password. Returns error message or None on success.
+    """
+    err = _validate_password(password)
+    if err:
+        return err
+
+    data_dir = _get_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cred_path = _get_viewer_credential_path()
+    salt = secrets.token_bytes(32)
+    derived = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt=salt,
+        iterations=PBKDF2_ITERATIONS,
+    )
+    salt_b64 = base64.standard_b64encode(salt).decode("ascii")
+    hash_b64 = base64.standard_b64encode(derived).decode("ascii")
+    content = f"{salt_b64}:{hash_b64}"
+
+    try:
+        tmp_path = cred_path.with_suffix(".tmp")
+        tmp_path.write_text(content)
+        tmp_path.chmod(0o600)
+        tmp_path.replace(cred_path)
+        _load_viewer_credential_from_file()
+        return None
+    except OSError as e:
+        logger.error("Failed to write viewer credential file: %s", e)
+        return "普通用户密码保存失败"
+
+
 def verify_password(password: str) -> bool:
     """Verify password against stored credential. Constant-time where applicable."""
     if not is_auth_enabled():
@@ -329,42 +415,93 @@ def change_password(current: str, new: str) -> Optional[str]:
         return "密码保存失败"
 
 
-def create_session() -> str:
-    """Create a signed session payload. Format: nonce.ts.signature."""
+def create_session(role: str = ROLE_SUPER_ADMIN) -> str:
+    """Create a signed session payload. Format: nonce.ts.role.signature."""
     secret = _get_session_secret()
     if not secret:
         return ""
+    normalized_role = (role or ROLE_SUPER_ADMIN).strip().lower()
+    if normalized_role not in ROLE_VALUES:
+        normalized_role = ROLE_SUPER_ADMIN
     nonce = secrets.token_urlsafe(32)
     ts = str(int(time.time()))
-    payload = f"{nonce}.{ts}"
+    payload = f"{nonce}.{ts}.{normalized_role}"
     sig = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
-def verify_session(value: str) -> bool:
-    """Verify session cookie and check expiry."""
+def parse_session(value: str) -> Optional[dict]:
+    """Parse, verify session cookie, and return payload data when valid."""
     secret = _get_session_secret()
     if not secret or not value:
-        return False
+        return None
     parts = value.split(".")
-    if len(parts) != 3:
-        return False
-    nonce, ts_str, sig = parts[0], parts[1], parts[2]
-    payload = f"{nonce}.{ts_str}"
+    if len(parts) == 4:
+        nonce, ts_str, role, sig = parts[0], parts[1], parts[2], parts[3]
+    elif len(parts) == 3:
+        # Backward compatibility for historical sessions.
+        nonce, ts_str, sig = parts[0], parts[1], parts[2]
+        role = ROLE_SUPER_ADMIN
+    else:
+        return None
+    normalized_role = (role or ROLE_SUPER_ADMIN).strip().lower()
+    if normalized_role not in ROLE_VALUES:
+        return None
+    payload = f"{nonce}.{ts_str}.{normalized_role}"
     expected = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
-        return False
+        # Backward compatibility path for legacy super-admin session format.
+        if len(parts) != 3:
+            return None
+        legacy_payload = f"{nonce}.{ts_str}"
+        legacy_expected = hmac.new(secret, legacy_payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, legacy_expected):
+            return None
+        normalized_role = ROLE_SUPER_ADMIN
     try:
         ts = int(ts_str)
     except ValueError:
-        return False
+        return None
     try:
         max_age_hours = int(os.getenv("ADMIN_SESSION_MAX_AGE_HOURS", str(SESSION_MAX_AGE_HOURS_DEFAULT)))
     except ValueError:
         max_age_hours = SESSION_MAX_AGE_HOURS_DEFAULT
     if time.time() - ts > max_age_hours * 3600:
-        return False
-    return True
+        return None
+    return {"nonce": nonce, "timestamp": ts, "role": normalized_role}
+
+
+def verify_session(value: str) -> bool:
+    """Verify session cookie and check expiry."""
+    return parse_session(value) is not None
+
+
+def get_role_capabilities(role: Optional[str]) -> RoleCapabilities:
+    """Map role to frontend/backed shared capabilities."""
+    normalized = (role or "").strip().lower()
+    if normalized == ROLE_SUPER_ADMIN:
+        return {
+            "canAccessSettings": True,
+            "canUseTheme": True,
+            "canAnalyzeHome": True,
+            "canAnalyzeRecommendation": True,
+            "canAnalyzeBatch": True,
+        }
+    if normalized == ROLE_VIEWER:
+        return {
+            "canAccessSettings": False,
+            "canUseTheme": False,
+            "canAnalyzeHome": True,
+            "canAnalyzeRecommendation": False,
+            "canAnalyzeBatch": False,
+        }
+    return {
+        "canAccessSettings": False,
+        "canUseTheme": False,
+        "canAnalyzeHome": False,
+        "canAnalyzeRecommendation": False,
+        "canAnalyzeBatch": False,
+    }
 
 
 def get_client_ip(request) -> str:
@@ -488,11 +625,42 @@ def reset_password_cli() -> int:
     return 0
 
 
+def reset_viewer_password_cli() -> int:
+    """Interactive CLI to reset viewer password. Returns exit code."""
+    _ensure_env_loaded()
+    if not _is_auth_enabled_from_env():
+        print("Error: Auth is not enabled. Set ADMIN_AUTH_ENABLED=true in .env", file=sys.stderr)
+        return 1
+
+    print("Enter new viewer password (will not echo):", end=" ")
+    pwd = getpass.getpass("")
+    err = _validate_password(pwd)
+    if err:
+        print(f"Error: {err}", file=sys.stderr)
+        return 1
+
+    print("Confirm new viewer password:", end=" ")
+    pwd2 = getpass.getpass("")
+    if pwd != pwd2:
+        print("Error: Passwords do not match", file=sys.stderr)
+        return 1
+
+    err = set_viewer_password(pwd)
+    if err:
+        print(f"Error: {err}", file=sys.stderr)
+        return 1
+
+    print("Viewer password has been reset successfully.")
+    return 0
+
+
 def _main() -> int:
     """CLI entry: reset_password subcommand."""
     if len(sys.argv) > 1 and sys.argv[1] == "reset_password":
         return reset_password_cli()
-    print("Usage: python -m src.auth reset_password", file=sys.stderr)
+    if len(sys.argv) > 1 and sys.argv[1] == "reset_viewer_password":
+        return reset_viewer_password_cli()
+    print("Usage: python -m src.auth reset_password|reset_viewer_password", file=sys.stderr)
     return 1
 
 

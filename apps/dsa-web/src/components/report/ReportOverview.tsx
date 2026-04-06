@@ -121,12 +121,20 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     return 'danger';
   };
 
+  const formatListDate = (value?: string) => {
+    const textValue = (value || '').trim();
+    if (!textValue) {
+      return '--';
+    }
+    if (/^\d{8}$/.test(textValue)) {
+      return `${textValue.slice(0, 4)}-${textValue.slice(4, 6)}-${textValue.slice(6, 8)}`;
+    }
+    return textValue;
+  };
+
   return (
     <div className="space-y-5">
-      {/* 主信息区 - 两列布局，items-stretch 确保右侧与左侧同高 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
-        {/* 左侧：股票信息与结论 */}
-        <div className="lg:col-span-2 space-y-5">
+      <div className="space-y-5">
           {/* 股票头部 */}
           <Card variant="gradient" padding="md" className="home-report-hero">
             <div className="flex items-start justify-between mb-5">
@@ -164,118 +172,149 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
             {/* 关键结论 */}
             <div className="home-divider border-t pt-5">
               <span className="label-uppercase">{text.keyInsights}</span>
-              <p className="mt-2 max-w-[62ch] whitespace-pre-wrap text-left text-[15px] leading-7 text-foreground">
-                {summary.analysisSummary || text.noAnalysisSummary}
-              </p>
+              <div className="mt-2 grid gap-4 lg:grid-cols-3">
+                <p className="whitespace-pre-wrap text-left text-[15px] leading-7 text-foreground lg:col-span-2">
+                  {summary.analysisSummary || text.noAnalysisSummary}
+                </p>
+                <div className="space-y-2">
+                  <Card
+                    variant="bordered"
+                    padding="sm"
+                    className="home-panel-card home-insight-card"
+                    style={{ ['--home-insight-tone' as string]: 'var(--home-strategy-buy)' }}
+                  >
+                    <div className="space-y-1">
+                      <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.actionAdvice}</h4>
+                      <p className="home-insight-body text-sm leading-6">
+                        {summary.operationAdvice || text.noAdvice}
+                      </p>
+                    </div>
+                  </Card>
+                  <Card
+                    variant="bordered"
+                    padding="sm"
+                    className="home-panel-card home-insight-card"
+                    style={{ ['--home-insight-tone' as string]: 'var(--home-strategy-take)' }}
+                  >
+                    <div className="space-y-1">
+                      <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.trendPrediction}</h4>
+                      <p className="home-insight-body text-sm leading-6">
+                        {summary.trendPrediction || text.noPrediction}
+                      </p>
+                    </div>
+                  </Card>
+                </div>
+              </div>
             </div>
           </Card>
 
-          {/* 操作建议和趋势预测 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 操作建议 */}
-            <Card
-              variant="bordered"
-              padding="sm"
-              hoverable
-              className="home-panel-card home-insight-card"
-              style={{ ['--home-insight-tone' as string]: 'var(--home-strategy-buy)' }}
-            >
-              <div className="flex items-start gap-3">
-                <div className="home-insight-icon w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center flex-shrink-0">
-                  <svg className="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                  </svg>
-                </div>
-                <div className="space-y-1.5">
-                  <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.actionAdvice}</h4>
-                  <p className="home-insight-body text-sm leading-6">
-                    {summary.operationAdvice || text.noAdvice}
-                  </p>
-                </div>
+          <Card variant="bordered" padding="sm" className="home-panel-card text-left">
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className="label-uppercase">{text.basicInfo}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.stockName}</div>
+                <div className="mt-0.5 font-medium text-foreground">{meta.stockName || '--'}</div>
               </div>
-            </Card>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.stockCode}</div>
+                <div className="mt-0.5 font-mono text-foreground">{meta.stockCode || '--'}</div>
+              </div>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.industry}</div>
+                <div className="mt-0.5 text-foreground">{meta.industry || '--'}</div>
+              </div>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.area}</div>
+                <div className="mt-0.5 text-foreground">{meta.area || '--'}</div>
+              </div>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.market}</div>
+                <div className="mt-0.5 text-foreground">{meta.market || '--'}</div>
+              </div>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.listDate}</div>
+                <div className="mt-0.5 text-foreground">{formatListDate(meta.listDate)}</div>
+              </div>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.symbol}</div>
+                <div className="mt-0.5 font-mono text-foreground">{meta.symbol || '--'}</div>
+              </div>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.cnspell}</div>
+                <div className="mt-0.5 text-foreground">{meta.cnspell || '--'}</div>
+              </div>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2">
+                <div className="text-[11px] text-muted-text">{text.actName}</div>
+                <div className="mt-0.5 text-foreground">{meta.actName || '--'}</div>
+              </div>
+              <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2 md:col-span-2 xl:col-span-2 2xl:col-span-1">
+                <div className="text-[11px] text-muted-text">{text.actEntType}</div>
+                <div className="mt-0.5 text-foreground">{meta.actEntType || '--'}</div>
+              </div>
+            </div>
+          </Card>
 
-            {/* 趋势预测 */}
-            <Card
-              variant="bordered"
-              padding="sm"
-              hoverable
-              className="home-panel-card home-insight-card"
-              style={{ ['--home-insight-tone' as string]: 'var(--home-strategy-take)' }}
-            >
-              <div className="flex items-start gap-3">
-                <div className="home-insight-icon w-8 h-8 rounded-lg bg-warning/10 flex items-center justify-center flex-shrink-0">
-                  <svg className="w-4 h-4 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                  </svg>
+          <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-3">
+            {relatedBoards.length > 0 ? (
+              <Card variant="bordered" padding="sm" className="home-panel-card text-left xl:col-span-2">
+                <div className="mb-3 flex items-baseline gap-2">
+                  <span className="label-uppercase">{text.boardLinkage}</span>
+                  <h3 className="mt-0.5 text-base font-semibold text-foreground">{text.relatedBoards}</h3>
                 </div>
-                <div className="space-y-1.5">
-                  <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.trendPrediction}</h4>
-                  <p className="home-insight-body text-sm leading-6">
-                    {summary.trendPrediction || text.noPrediction}
-                  </p>
+
+                <div className="space-y-2.5">
+                  {relatedBoards.map((board, index) => {
+                    const boardName = normalizeBoardName(board.name);
+                    const signal = boardSignals.get(boardName);
+                    return (
+                      <div
+                        key={`${boardName}-${board.code || index}`}
+                        className="flex flex-wrap items-center gap-2 text-sm"
+                      >
+                        <span className="home-accent-chip px-2 py-0.5 text-xs font-medium">
+                          {boardName}
+                        </span>
+                        {board.type && (
+                          <span className="home-board-pill rounded-full px-2 py-0.5 text-xs">
+                            {board.type}
+                          </span>
+                        )}
+                        {signal && (
+                          <Badge
+                            variant={getBoardStatusVariant(signal.status)}
+                            className="home-board-status-badge shadow-none"
+                          >
+                            {getBoardStatusLabel(signal.status)}
+                          </Badge>
+                        )}
+                        {signal && signal.changePct !== undefined && signal.changePct !== null && (
+                          <span
+                            className="text-xs font-mono"
+                            style={getPriceChangeStyle(signal.changePct)}
+                          >
+                            {formatChangePct(signal.changePct)}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
+              </Card>
+            ) : (
+              <Card variant="bordered" padding="sm" className="home-panel-card text-left xl:col-span-2">
+                <div className="text-sm text-secondary-text">暂无关联板块数据</div>
+              </Card>
+            )}
+
+            <Card variant="bordered" padding="sm" className="home-panel-card home-rail-card !overflow-visible self-start">
+              <div className="text-center py-2">
+                <h3 className="mb-3 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
+                <ScoreGauge score={summary.sentimentScore} size="md" language={reportLanguage} />
               </div>
             </Card>
           </div>
-
-          {relatedBoards.length > 0 && (
-            <Card variant="bordered" padding="sm" className="home-panel-card text-left">
-              <div className="mb-3 flex items-baseline gap-2">
-                <span className="label-uppercase">{text.boardLinkage}</span>
-                <h3 className="mt-0.5 text-base font-semibold text-foreground">{text.relatedBoards}</h3>
-              </div>
-
-              <div className="space-y-2.5">
-                {relatedBoards.map((board, index) => {
-                  const boardName = normalizeBoardName(board.name);
-                  const signal = boardSignals.get(boardName);
-                  return (
-                    <div
-                      key={`${boardName}-${board.code || index}`}
-                      className="flex flex-wrap items-center gap-2 text-sm"
-                    >
-                      <span className="home-accent-chip px-2 py-0.5 text-xs font-medium">
-                        {boardName}
-                      </span>
-                      {board.type && (
-                        <span className="home-board-pill rounded-full px-2 py-0.5 text-xs">
-                          {board.type}
-                        </span>
-                      )}
-                      {signal && (
-                        <Badge
-                          variant={getBoardStatusVariant(signal.status)}
-                          className="home-board-status-badge shadow-none"
-                        >
-                          {getBoardStatusLabel(signal.status)}
-                        </Badge>
-                      )}
-                      {signal && signal.changePct !== undefined && signal.changePct !== null && (
-                        <span
-                          className="text-xs font-mono"
-                          style={getPriceChangeStyle(signal.changePct)}
-                        >
-                          {formatChangePct(signal.changePct)}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          )}
-        </div>
-
-        {/* 右侧：情绪指标 - 填满格子高度，消除与 STRATEGY POINTS 之间的空隙 */}
-        <div className="flex flex-col self-stretch min-h-full">
-          <Card variant="bordered" padding="md" className="home-panel-card home-rail-card !overflow-visible flex-1 flex flex-col min-h-0">
-            <div className="text-center flex-1 flex flex-col justify-center">
-              <h3 className="mb-5 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
-              <ScoreGauge score={summary.sentimentScore} size="lg" language={reportLanguage} />
-            </div>
-          </Card>
-        </div>
       </div>
     </div>
   );

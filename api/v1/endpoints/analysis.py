@@ -17,20 +17,27 @@
 """
 
 import asyncio
+import csv
 import json
 import logging
 import re
 from datetime import datetime
-from typing import Optional, Union, Dict, Any
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional, Union, Dict, Any, List, Tuple
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from api.deps import get_config_dep
+from api.deps import enforce_capability, get_config_dep
 from api.v1.schemas.analysis import (
     AnalyzeRequest,
+    AnalyzeUniverseRequest,
     AnalysisResultResponse,
     TaskAccepted,
+    AnalyzeUniverseAcceptedResponse,
+    UniverseStockItem,
+    UniverseStockListResponse,
     BatchTaskAcceptedResponse,
     BatchTaskAcceptedItem,
     BatchDuplicateTaskItem,
@@ -47,7 +54,8 @@ from api.v1.schemas.history import (
     ReportStrategy,
     ReportDetails,
 )
-from data_provider.base import canonical_stock_code, normalize_stock_code
+from data_provider.base import canonical_stock_code, normalize_stock_code, is_bse_code
+from data_provider.tushare_fetcher import TushareFetcher
 from src.config import Config
 from src.report_language import get_localized_stock_name, normalize_report_language
 from src.services.name_to_code_resolver import resolve_name_to_code
@@ -69,6 +77,283 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SUPPORTED_FREE_TEXT_RE = re.compile(r"^[A-Za-z0-9.*\-+\u3400-\u9fff\s]+$")
+_DEFAULT_UNIVERSE_CHUNK_SIZE = 50
+_MAX_UNIVERSE_CHUNK_SIZE = 100
+_MAX_GENERAL_BATCH_SIZE = 50
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _extract_stock_code(raw_value: Optional[str]) -> str:
+    text = (raw_value or "").strip()
+    if not text:
+        return ""
+    if "." in text:
+        text = text.split(".", 1)[0].strip()
+    return text.upper()
+
+
+def _parse_basic_info_csv(path: Path) -> Dict[str, Dict[str, str]]:
+    info_map: Dict[str, Dict[str, str]] = {}
+    if not path.exists():
+        return info_map
+
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ts_code = (row.get("ts_code") or row.get("tsCode") or "").strip()
+            code = _extract_stock_code(
+                row.get("code")
+                or row.get("symbol")
+                or row.get("stock_code")
+                or row.get("stockCode")
+                or ts_code
+            )
+            if not code:
+                continue
+
+            current = info_map.get(code, {})
+            info_map[code] = {
+                "area": (row.get("area") or current.get("area") or "").strip(),
+                "industry": (row.get("industry") or current.get("industry") or "").strip(),
+                "market": (row.get("market") or current.get("market") or "").strip(),
+                "list_date": (
+                    row.get("list_date")
+                    or row.get("listDate")
+                    or current.get("list_date")
+                    or ""
+                ).strip(),
+                "symbol": (row.get("symbol") or current.get("symbol") or "").strip(),
+                "ts_code": (row.get("ts_code") or row.get("tsCode") or current.get("ts_code") or "").strip(),
+                "cnspell": (row.get("cnspell") or row.get("cn_spell") or current.get("cnspell") or "").strip(),
+                "act_name": (row.get("act_name") or row.get("actName") or current.get("act_name") or "").strip(),
+                "act_ent_type": (
+                    row.get("act_ent_type")
+                    or row.get("actEntType")
+                    or current.get("act_ent_type")
+                    or ""
+                ).strip(),
+            }
+
+    return info_map
+
+
+@lru_cache(maxsize=4)
+def _load_stock_basic_info_map(fallback_path_value: str) -> Dict[str, Dict[str, str]]:
+    project_root = _project_root()
+    merged: Dict[str, Dict[str, str]] = {}
+
+    if fallback_path_value:
+        fallback_path = Path(fallback_path_value)
+        if not fallback_path.is_absolute():
+            fallback_path = project_root / fallback_path
+        merged.update(_parse_basic_info_csv(fallback_path))
+
+    latest_snapshot = sorted(project_root.glob("tushare_stock_basic_*.csv"))
+    if latest_snapshot:
+        snapshot_map = _parse_basic_info_csv(latest_snapshot[-1])
+        for code, payload in snapshot_map.items():
+            base = merged.get(code, {})
+            merged[code] = {
+                "area": base.get("area") or payload.get("area") or "",
+                "industry": base.get("industry") or payload.get("industry") or "",
+                "market": base.get("market") or payload.get("market") or "",
+                "list_date": base.get("list_date") or payload.get("list_date") or "",
+                "symbol": base.get("symbol") or payload.get("symbol") or "",
+                "ts_code": base.get("ts_code") or payload.get("ts_code") or "",
+                "cnspell": base.get("cnspell") or payload.get("cnspell") or "",
+                "act_name": base.get("act_name") or payload.get("act_name") or "",
+                "act_ent_type": base.get("act_ent_type") or payload.get("act_ent_type") or "",
+            }
+
+    return merged
+
+
+def _enrich_a_share_entries_with_basic_info(
+    entries: List[Dict[str, Optional[str]]],
+    config: Config,
+) -> List[Dict[str, Optional[str]]]:
+    fallback_path_value = (getattr(config, "a_share_universe_fallback_file", "") or "").strip()
+    basic_info_map = _load_stock_basic_info_map(fallback_path_value)
+    if not basic_info_map:
+        return entries
+
+    keys = ("area", "industry", "market", "list_date", "symbol", "ts_code", "cnspell", "act_name", "act_ent_type")
+    for entry in entries:
+        code_key = _extract_stock_code(entry.get("stock_code") or entry.get("ts_code") or entry.get("symbol"))
+        if not code_key:
+            continue
+        payload = basic_info_map.get(code_key)
+        if not payload:
+            continue
+        for key in keys:
+            current = (entry.get(key) or "").strip()
+            if current:
+                continue
+            value = (payload.get(key) or "").strip()
+            if value:
+                entry[key] = value
+    return entries
+
+
+def _is_a_share_code(code: str, ts_code: Optional[str] = None) -> bool:
+    stock_code = (code or "").strip()
+    if not stock_code.isdigit() or len(stock_code) != 6:
+        return False
+
+    if ts_code and "." in ts_code:
+        suffix = ts_code.split(".")[-1].upper()
+        if suffix == "SH":
+            return stock_code.startswith(("600", "601", "603", "605", "688", "689"))
+        if suffix == "SZ":
+            return stock_code.startswith(("000", "001", "002", "003", "300", "301"))
+        if suffix == "BJ":
+            return is_bse_code(stock_code)
+
+    if is_bse_code(stock_code):
+        return True
+    return stock_code.startswith(
+        ("600", "601", "603", "605", "688", "689", "000", "001", "002", "003", "300", "301")
+    )
+
+
+def _resolve_universe_chunk_size(requested: Optional[int], config: Config) -> int:
+    if requested is not None:
+        return max(1, min(int(requested), _MAX_UNIVERSE_CHUNK_SIZE))
+    configured = int(getattr(config, "analysis_universe_chunk_size", _DEFAULT_UNIVERSE_CHUNK_SIZE))
+    return max(1, min(configured, _MAX_UNIVERSE_CHUNK_SIZE))
+
+
+def _load_a_share_entries_from_fallback_file(config: Config) -> List[Dict[str, Optional[str]]]:
+    configured_path = (getattr(config, "a_share_universe_fallback_file", "") or "").strip()
+    if not configured_path:
+        return []
+
+    path = Path(configured_path)
+    if not path.is_absolute():
+        path = _project_root() / path
+    if not path.exists():
+        logger.warning("[analysis] A-share fallback file does not exist: %s", path)
+        return []
+
+    deduped: List[Dict[str, Optional[str]]] = []
+    seen: set = set()
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                ts_code = (row.get("ts_code") or row.get("tsCode") or "").strip()
+                raw_code = (
+                    row.get("code")
+                    or row.get("symbol")
+                    or row.get("stock_code")
+                    or row.get("stockCode")
+                    or ""
+                )
+                base_code = (raw_code or "").strip()
+                if ts_code and not base_code:
+                    base_code = ts_code.split(".")[0].strip()
+
+                if not _is_a_share_code(base_code, ts_code):
+                    continue
+                canonical = canonical_stock_code(base_code)
+                norm = normalize_stock_code(canonical)
+                if norm in seen:
+                    continue
+                seen.add(norm)
+                name = (
+                    (row.get("name") or row.get("stock_name") or row.get("stockName") or "").strip()
+                    or None
+                )
+                deduped.append(
+                    {
+                        "stock_code": canonical,
+                        "stock_name": name,
+                        "area": ((row.get("area") or "").strip() or None),
+                        "industry": ((row.get("industry") or "").strip() or None),
+                        "market": ((row.get("market") or "").strip() or None),
+                        "list_date": (
+                            (row.get("list_date") or row.get("listDate") or "").strip() or None
+                        ),
+                        "symbol": ((row.get("symbol") or "").strip() or None),
+                        "ts_code": (ts_code or None),
+                        "cnspell": ((row.get("cnspell") or row.get("cn_spell") or "").strip() or None),
+                        "act_name": ((row.get("act_name") or row.get("actName") or "").strip() or None),
+                        "act_ent_type": (
+                            (row.get("act_ent_type") or row.get("actEntType") or "").strip() or None
+                        ),
+                    }
+                )
+    except Exception as exc:
+        logger.error("[analysis] Failed to load A-share fallback file %s: %s", path, exc)
+        return []
+
+    return deduped
+
+
+def _load_a_share_codes_from_fallback_file(config: Config) -> List[str]:
+    return [
+        item.get("stock_code")
+        for item in _load_a_share_entries_from_fallback_file(config)
+        if item.get("stock_code")
+    ]
+
+
+def _load_all_a_share_entries(config: Config) -> Tuple[List[Dict[str, Optional[str]]], str]:
+    try:
+        fetcher = TushareFetcher()
+        if fetcher.is_available():
+            stock_list = fetcher.get_stock_list()
+            if stock_list is not None and not stock_list.empty:
+                deduped: List[Dict[str, Optional[str]]] = []
+                seen: set = set()
+                for _, row in stock_list.iterrows():
+                    raw_code = str(row.get("code") or "").strip()
+                    if not _is_a_share_code(raw_code):
+                        continue
+                    canonical = canonical_stock_code(raw_code)
+                    norm = normalize_stock_code(canonical)
+                    if norm in seen:
+                        continue
+                    seen.add(norm)
+                    raw_name = row.get("name")
+                    stock_name = str(raw_name).strip() if raw_name is not None else ""
+                    deduped.append(
+                        {
+                            "stock_code": canonical,
+                            "stock_name": stock_name or None,
+                            "area": (str(row.get("area") or "").strip() or None),
+                            "industry": (str(row.get("industry") or "").strip() or None),
+                            "market": (str(row.get("market") or "").strip() or None),
+                            "list_date": (str(row.get("list_date") or "").strip() or None),
+                            "symbol": (str(row.get("symbol") or "").strip() or None),
+                            "ts_code": (str(row.get("ts_code") or "").strip() or None),
+                            "cnspell": (str(row.get("cnspell") or "").strip() or None),
+                            "act_name": (str(row.get("act_name") or "").strip() or None),
+                            "act_ent_type": (str(row.get("act_ent_type") or "").strip() or None),
+                        }
+                    )
+                if deduped:
+                    return _enrich_a_share_entries_with_basic_info(deduped, config), "tushare"
+    except Exception as exc:
+        logger.warning("[analysis] Failed to load A-share universe from tushare: %s", exc)
+
+    fallback_enabled = bool(getattr(config, "a_share_universe_fallback_enabled", True))
+    if not fallback_enabled:
+        return [], "none"
+
+    fallback_entries = _load_a_share_entries_from_fallback_file(config)
+    if fallback_entries:
+        return _enrich_a_share_entries_with_basic_info(fallback_entries, config), "fallback_file"
+    return [], "none"
+
+
+def _load_all_a_share_codes(config: Config) -> Tuple[List[str], str]:
+    entries, source = _load_all_a_share_entries(config)
+    stock_codes = [item.get("stock_code") for item in entries if item.get("stock_code")]
+    return stock_codes, source
 
 
 def _invalid_analysis_input_error() -> HTTPException:
@@ -119,6 +404,26 @@ def _resolve_and_normalize_input(raw_value: str) -> str:
     raise _invalid_analysis_input_error()
 
 
+def _is_recommendation_selected_batch(request: AnalyzeRequest) -> bool:
+    """Return True when request comes from Recommendation page selected list."""
+    selection_source = (request.selection_source or "").strip().lower()
+    original_query = (request.original_query or "").strip().lower()
+    return (
+        bool(request.async_mode)
+        and selection_source == "import"
+        and original_query.startswith("universe:a_share:selected")
+    )
+
+
+def _is_recommendation_single(request: AnalyzeRequest, stock_count: int) -> bool:
+    if stock_count != 1:
+        return False
+    if not bool(request.async_mode):
+        return False
+    original_query = (request.original_query or "").strip().lower()
+    return original_query.startswith("recommendation:")
+
+
 # ============================================================
 # POST /analyze - 触发股票分析
 # ============================================================
@@ -141,6 +446,7 @@ def _resolve_and_normalize_input(raw_value: str) -> str:
 )
 def trigger_analysis(
         request: AnalyzeRequest,
+        http_request: Request = None,
         config: Config = Depends(get_config_dep)
 ) -> Union[AnalysisResultResponse, JSONResponse]:
     """
@@ -198,14 +504,22 @@ def trigger_analysis(
     
     stock_codes = unique_codes
 
-    # Limit the number of stocks in a single request to prevent DoS
-    MAX_BATCH_SIZE = 50
-    if len(stock_codes) > MAX_BATCH_SIZE:
+    if http_request is not None and len(stock_codes) > 1:
+        enforce_capability(http_request, "canAnalyzeBatch")
+
+    if http_request is not None and _is_recommendation_selected_batch(request):
+        enforce_capability(http_request, "canAnalyzeRecommendation")
+
+    if http_request is not None and _is_recommendation_single(request, len(stock_codes)):
+        enforce_capability(http_request, "canAnalyzeRecommendation")
+
+    # Keep generic requests protected; Recommendation selected batch is exempt.
+    if len(stock_codes) > _MAX_GENERAL_BATCH_SIZE and not _is_recommendation_selected_batch(request):
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "validation_error",
-                "message": f"单次分析请求最多支持 {MAX_BATCH_SIZE} 只股票"
+                "message": f"单次分析请求最多支持 {_MAX_GENERAL_BATCH_SIZE} 只股票"
             }
         )
 
@@ -232,6 +546,124 @@ def trigger_analysis(
 
     # Async mode submits one task per stock.
     return _handle_async_analysis_batch(stock_codes, request)
+
+
+@router.post(
+    "/analyze-universe",
+    responses={
+        202: {"description": "全市场分析任务已接受", "model": AnalyzeUniverseAcceptedResponse},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+        500: {"description": "服务内部错误", "model": ErrorResponse},
+    },
+    summary="触发全市场分析任务",
+    description="服务端加载股票池并分批提交异步分析任务，当前仅支持全A股（a_share）。",
+)
+def trigger_universe_analysis(
+    request: AnalyzeUniverseRequest,
+    http_request: Request = None,
+    config: Config = Depends(get_config_dep),
+) -> JSONResponse:
+    if http_request is not None:
+        enforce_capability(http_request, "canAnalyzeBatch")
+        enforce_capability(http_request, "canAnalyzeRecommendation")
+    chunk_size = _resolve_universe_chunk_size(request.chunk_size, config)
+    stock_codes, source = _load_all_a_share_codes(config)
+    if not stock_codes:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "universe_unavailable",
+                "message": "无法加载全A股票池，请检查 Tushare 配置或本地回退文件",
+            },
+        )
+
+    task_queue = get_task_queue()
+    accepted_total = 0
+    duplicate_total = 0
+    sample_task_ids: List[str] = []
+
+    for start in range(0, len(stock_codes), chunk_size):
+        chunk = stock_codes[start: start + chunk_size]
+        accepted_tasks, duplicate_errors = task_queue.submit_tasks_batch(
+            stock_codes=chunk,
+            stock_name=None,
+            original_query=f"universe:{request.universe}",
+            selection_source="import",
+            report_type="detailed",
+            force_refresh=False,
+            notify=request.notify,
+        )
+        accepted_total += len(accepted_tasks)
+        duplicate_total += len(duplicate_errors)
+        if len(sample_task_ids) < 10:
+            remaining = 10 - len(sample_task_ids)
+            sample_task_ids.extend(task.task_id for task in accepted_tasks[:remaining])
+
+    chunk_count = (len(stock_codes) + chunk_size - 1) // chunk_size
+    response = AnalyzeUniverseAcceptedResponse(
+        universe=request.universe,
+        source=source,
+        total_symbols=len(stock_codes),
+        chunk_size=chunk_size,
+        chunk_count=chunk_count,
+        submitted_tasks=accepted_total,
+        duplicate_tasks=duplicate_total,
+        sample_task_ids=sample_task_ids,
+        message=(
+            f"已提交全A分析任务：总计 {len(stock_codes)} 只，"
+            f"成功 {accepted_total}，重复跳过 {duplicate_total}"
+        ),
+    )
+    return JSONResponse(status_code=202, content=response.model_dump())
+
+
+@router.get(
+    "/universe/a-share",
+    response_model=UniverseStockListResponse,
+    responses={
+        200: {"description": "全A股票池列表"},
+        500: {"description": "服务内部错误", "model": ErrorResponse},
+    },
+    summary="获取全A股票池列表",
+    description="返回全A股票池（代码与名称），供前端勾选后批量提交分析。",
+)
+def get_a_share_universe_list(
+    config: Config = Depends(get_config_dep),
+) -> UniverseStockListResponse:
+    entries, source = _load_all_a_share_entries(config)
+    if not entries:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "universe_unavailable",
+                "message": "无法加载全A股票池，请检查 Tushare 配置或本地回退文件",
+            },
+        )
+
+    items = [
+        UniverseStockItem(
+            stock_code=str(item.get("stock_code", "")).strip(),
+            stock_name=item.get("stock_name"),
+            area=item.get("area"),
+            industry=item.get("industry"),
+            market=item.get("market"),
+            list_date=item.get("list_date"),
+            symbol=item.get("symbol"),
+            ts_code=item.get("ts_code"),
+            cnspell=item.get("cnspell"),
+            act_name=item.get("act_name"),
+            act_ent_type=item.get("act_ent_type"),
+        )
+        for item in entries
+        if str(item.get("stock_code", "")).strip()
+    ]
+
+    return UniverseStockListResponse(
+        universe="a_share",
+        source=source,
+        total_symbols=len(items),
+        items=items,
+    )
 
 
 def _handle_async_analysis_batch(

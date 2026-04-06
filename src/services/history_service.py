@@ -12,8 +12,15 @@ Responsibilities:
 from __future__ import annotations
 import json
 import logging
+import re
+import time
 from datetime import date, datetime, timedelta
+from html import unescape
 from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
+from urllib.parse import urlencode
+import xml.etree.ElementTree as ET
+
+import requests
 
 from src.config import get_config, resolve_news_window_days
 from src.report_language import (
@@ -121,6 +128,7 @@ class HistoryService:
                     "stock_name": record.name,
                     "report_type": record.report_type,
                     "sentiment_score": record.sentiment_score,
+                    "signal_score": record.signal_score,
                     "operation_advice": record.operation_advice,
                     "created_at": record.created_at.isoformat() if record.created_at else None,
                 })
@@ -192,10 +200,116 @@ class HistoryService:
             if not record:
                 logger.warning(f"resolve_and_get_news: record not found for {record_id}")
                 return []
-            return self.get_news_intel(query_id=record.query_id, limit=limit)
+            items = self.get_news_intel(query_id=record.query_id, limit=limit)
+            if items:
+                return items
+            # 当历史库没有关联资讯时，实时走公开 RSS 兜底，避免前端长期空列表。
+            return self._fetch_live_news_fallback(
+                stock_code=str(getattr(record, "code", "") or "").strip(),
+                stock_name=str(getattr(record, "name", "") or "").strip(),
+                limit=limit,
+            )
         except Exception as e:
             logger.error(f"resolve_and_get_news failed for {record_id}: {e}", exc_info=True)
             return []
+
+    @staticmethod
+    def _strip_html(text: str) -> str:
+        raw = unescape((text or "").strip())
+        cleaned = re.sub(r"<[^>]+>", " ", raw)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
+    @staticmethod
+    def _is_foreign_code(stock_code: str) -> bool:
+        code = (stock_code or "").strip().upper()
+        if not code:
+            return False
+        if code.startswith("HK") and code[2:].isdigit():
+            return True
+        if code.endswith(".HK") or code.endswith(".US"):
+            return True
+        if re.match(r"^[A-Z]{1,5}(\.[A-Z]{1,2})?$", code):
+            return True
+        if re.match(r"^[0-9]{5}$", code):
+            return True
+        return False
+
+    def _fetch_live_news_fallback(
+        self,
+        stock_code: str,
+        stock_name: str,
+        limit: int,
+    ) -> List[Dict[str, str]]:
+        """
+        Use Google News RSS as a zero-key fallback when DB-linked intel is empty.
+        """
+        if not stock_code and not stock_name:
+            return []
+
+        is_foreign = self._is_foreign_code(stock_code)
+        # 弱网场景下限制总耗时，避免历史资讯接口阻塞导致前端超时。
+        total_budget_seconds = 6.0
+        per_request_timeout_seconds = 2.5
+        max_queries = 2
+        started_at = time.monotonic()
+
+        queries: List[str] = []
+        if stock_name and stock_code:
+            queries.append(f"{stock_name} {stock_code} {'stock news' if is_foreign else '股票 新闻'}")
+        if stock_name:
+            queries.append(f"{stock_name} {'latest news' if is_foreign else '最新 资讯'}")
+        if stock_code:
+            queries.append(f"{stock_code} {'stock latest news' if is_foreign else '股票 最新消息'}")
+        queries = queries[:max_queries]
+
+        seen: set[str] = set()
+        items: List[Dict[str, str]] = []
+        for query in queries:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= total_budget_seconds:
+                logger.debug("RSS 新闻兜底达到总耗时预算，提前结束")
+                break
+            if len(items) >= limit:
+                break
+            try:
+                params = {
+                    "q": query,
+                    "hl": "en-US" if is_foreign else "zh-CN",
+                    "gl": "US" if is_foreign else "CN",
+                    "ceid": "US:en" if is_foreign else "CN:zh-Hans",
+                }
+                url = f"https://news.google.com/rss/search?{urlencode(params)}"
+                # 剩余预算不足时使用更短超时，保证总耗时可控。
+                remaining_budget = max(0.1, total_budget_seconds - (time.monotonic() - started_at))
+                timeout_seconds = min(per_request_timeout_seconds, remaining_budget)
+                resp = requests.get(url, timeout=timeout_seconds)
+                if resp.status_code != 200:
+                    continue
+                root = ET.fromstring(resp.text)
+                for node in root.findall(".//item"):
+                    title = (node.findtext("title") or "").strip()
+                    link = (node.findtext("link") or "").strip()
+                    desc = self._strip_html(node.findtext("description") or "")
+                    if not title or not link:
+                        continue
+                    dedupe_key = link or title
+                    if dedupe_key in seen:
+                        continue
+                    seen.add(dedupe_key)
+                    items.append(
+                        {
+                            "title": title,
+                            "snippet": (desc[:200] + "...") if len(desc) > 200 else desc,
+                            "url": link,
+                        }
+                    )
+                    if len(items) >= limit:
+                        break
+            except Exception as e:
+                logger.debug(f"RSS 新闻兜底失败 query='{query}': {e}")
+                continue
+        return items
 
     def get_history_detail_by_id(self, record_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -279,6 +393,7 @@ class HistoryService:
             "operation_advice": record.operation_advice,
             "trend_prediction": record.trend_prediction,
             "sentiment_score": record.sentiment_score,
+            "signal_score": record.signal_score,
             "sentiment_label": self._get_sentiment_label(record.sentiment_score or 50),
             "ideal_buy": sniper_points.get("ideal_buy"),
             "secondary_buy": sniper_points.get("secondary_buy"),

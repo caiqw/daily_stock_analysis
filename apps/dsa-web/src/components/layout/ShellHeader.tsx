@@ -2,6 +2,7 @@ import type React from 'react';
 import { Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { ThemeToggle } from '../theme/ThemeToggle';
+import { useAuth } from '../../contexts/AuthContext';
 
 type ShellHeaderProps = {
   collapsed: boolean;
@@ -11,6 +12,7 @@ type ShellHeaderProps = {
 
 const TITLES: Record<string, { title: string; description: string }> = {
   '/': { title: '首页', description: '股票分析与历史报告工作台' },
+  '/recommendation': { title: '筛股', description: '全A股票池分析结果与只读浏览' },
   '/chat': { title: '问股', description: '多轮策略问答与历史会话管理' },
   '/backtest': { title: '回测', description: '回测任务与结果浏览' },
   '/settings': { title: '设置', description: '系统配置、模型与认证管理' },
@@ -22,6 +24,7 @@ export const ShellHeader: React.FC<ShellHeaderProps> = ({
   onOpenMobileNav,
 }) => {
   const location = useLocation();
+  const { capabilities } = useAuth();
   const current = TITLES[location.pathname] ?? { title: 'Daily Stock Analysis', description: 'Web workspace' };
 
   return (
@@ -50,7 +53,7 @@ export const ShellHeader: React.FC<ShellHeaderProps> = ({
           <p className="truncate text-xs text-secondary-text">{current.description}</p>
         </div>
 
-        <ThemeToggle />
+        {capabilities.canUseTheme ? <ThemeToggle /> : null}
       </div>
     </header>
   );

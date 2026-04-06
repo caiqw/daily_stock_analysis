@@ -427,6 +427,9 @@ class Config:
     
     # === 自选股配置 ===
     stock_list: List[str] = field(default_factory=list)
+    a_share_universe_fallback_enabled: bool = True
+    a_share_universe_fallback_file: str = "./data/stock_list_a.csv"
+    analysis_universe_chunk_size: int = 50
 
     # === 飞书云文档配置 ===
     feishu_app_id: Optional[str] = None
@@ -1062,6 +1065,21 @@ class Config:
         
         return cls(
             stock_list=stock_list,
+            a_share_universe_fallback_enabled=parse_env_bool(
+                os.getenv('A_SHARE_UNIVERSE_FALLBACK_ENABLED'),
+                default=True,
+            ),
+            a_share_universe_fallback_file=(
+                os.getenv('A_SHARE_UNIVERSE_FALLBACK_FILE', './data/stock_list_a.csv').strip()
+                or './data/stock_list_a.csv'
+            ),
+            analysis_universe_chunk_size=parse_env_int(
+                os.getenv('ANALYSIS_UNIVERSE_CHUNK_SIZE'),
+                50,
+                field_name='ANALYSIS_UNIVERSE_CHUNK_SIZE',
+                minimum=1,
+                maximum=100,
+            ),
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),

@@ -6,6 +6,7 @@ import { Drawer } from '../common/Drawer';
 import { SidebarNav } from './SidebarNav';
 import { cn } from '../../utils/cn';
 import { ThemeToggle } from '../theme/ThemeToggle';
+import { useAuth } from '../../contexts/AuthContext';
 
 type ShellProps = {
   children?: React.ReactNode;
@@ -14,6 +15,7 @@ type ShellProps = {
 export const Shell: React.FC<ShellProps> = ({ children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const collapsed = false;
+  const { capabilities } = useAuth();
 
   useEffect(() => {
     if (!mobileOpen) {
@@ -43,9 +45,11 @@ export const Shell: React.FC<ShellProps> = ({ children }) => {
         >
           <Menu className="h-5 w-5" />
         </button>
-        <div className="pointer-events-auto">
-          <ThemeToggle />
-        </div>
+        {capabilities.canUseTheme ? (
+          <div className="pointer-events-auto">
+            <ThemeToggle />
+          </div>
+        ) : null}
       </div>
 
       <div className="mx-auto flex min-h-screen w-full max-w-[1680px] px-3 py-3 sm:px-4 sm:py-4 lg:px-5">

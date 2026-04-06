@@ -19,6 +19,8 @@ def _reset_auth_globals() -> None:
     auth._session_secret = None
     auth._password_hash_salt = None
     auth._password_hash_stored = None
+    auth._viewer_password_hash_salt = None
+    auth._viewer_password_hash_stored = None
     auth._rate_limit = {}
 
 
@@ -94,10 +96,11 @@ class AuthSessionTestCase(unittest.TestCase):
             tok = auth.create_session()
             self.assertTrue(tok, "session token should be non-empty")
             parts = tok.split(".")
-            self.assertEqual(len(parts), 3, "format: nonce.ts.signature")
-            nonce, ts, sig = parts
+            self.assertEqual(len(parts), 4, "format: nonce.ts.role.signature")
+            nonce, ts, role, sig = parts
             self.assertTrue(nonce)
             self.assertTrue(ts.isdigit())
+            self.assertEqual(role, auth.ROLE_SUPER_ADMIN)
             self.assertTrue(sig)
             return tok
 
@@ -106,6 +109,20 @@ class AuthSessionTestCase(unittest.TestCase):
     def test_verify_session_valid_token(self) -> None:
         def run():
             tok = auth.create_session()
+            self.assertTrue(auth.verify_session(tok))
+            payload = auth.parse_session(tok)
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload["role"], auth.ROLE_SUPER_ADMIN)
+
+        self._patch_env_and_run(test_fn=run)
+
+    def test_verify_session_supports_viewer_role(self) -> None:
+        def run():
+            auth.set_viewer_password("viewer123")
+            tok = auth.create_session(role=auth.ROLE_VIEWER)
+            payload = auth.parse_session(tok)
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload["role"], auth.ROLE_VIEWER)
             self.assertTrue(auth.verify_session(tok))
 
         self._patch_env_and_run(test_fn=run)

@@ -9,7 +9,10 @@
 2. 提供 GET /api/v1/history/{query_id} 历史详情查询接口
 """
 
+import csv
 import logging
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
@@ -31,6 +34,7 @@ from api.v1.schemas.history import (
 )
 from api.v1.schemas.common import ErrorResponse
 from src.storage import DatabaseManager
+from src.config import get_config
 from src.report_language import (
     get_sentiment_label,
     get_localized_stock_name,
@@ -48,6 +52,98 @@ from src.utils.data_processing import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _extract_stock_code(raw_value: Optional[str]) -> str:
+    text = (raw_value or "").strip()
+    if not text:
+        return ""
+    if "." in text:
+        text = text.split(".", 1)[0].strip()
+    return text.upper()
+
+
+def _parse_basic_info_csv(path: Path) -> dict[str, dict[str, str]]:
+    info_map: dict[str, dict[str, str]] = {}
+    if not path.exists():
+        return info_map
+
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ts_code = (row.get("ts_code") or row.get("tsCode") or "").strip()
+            code = _extract_stock_code(
+                row.get("code")
+                or row.get("symbol")
+                or row.get("stock_code")
+                or row.get("stockCode")
+                or ts_code
+            )
+            if not code:
+                continue
+
+            current = info_map.get(code, {})
+            merged = {
+                "area": (row.get("area") or current.get("area") or "").strip(),
+                "industry": (row.get("industry") or current.get("industry") or "").strip(),
+                "market": (row.get("market") or current.get("market") or "").strip(),
+                "list_date": (row.get("list_date") or row.get("listDate") or current.get("list_date") or "").strip(),
+                "symbol": (row.get("symbol") or current.get("symbol") or "").strip(),
+                "ts_code": (row.get("ts_code") or row.get("tsCode") or current.get("ts_code") or "").strip(),
+                "cnspell": (row.get("cnspell") or row.get("cn_spell") or current.get("cnspell") or "").strip(),
+                "act_name": (row.get("act_name") or row.get("actName") or current.get("act_name") or "").strip(),
+                "act_ent_type": (
+                    row.get("act_ent_type")
+                    or row.get("actEntType")
+                    or current.get("act_ent_type")
+                    or ""
+                ).strip(),
+            }
+            info_map[code] = merged
+
+    return info_map
+
+
+@lru_cache(maxsize=1)
+def _load_stock_basic_info_map() -> dict[str, dict[str, str]]:
+    """Load and cache stock basic info from fallback/universe CSV sources."""
+    cfg = get_config()
+    project_root = Path(__file__).resolve().parents[3]
+    merged: dict[str, dict[str, str]] = {}
+
+    fallback_path_value = (getattr(cfg, "a_share_universe_fallback_file", "") or "").strip()
+    if fallback_path_value:
+        fallback_path = Path(fallback_path_value)
+        if not fallback_path.is_absolute():
+            fallback_path = project_root / fallback_path
+        merged.update(_parse_basic_info_csv(fallback_path))
+
+    # If fallback file has minimal columns only, supplement from latest exported Tushare snapshot.
+    latest_snapshot = sorted(project_root.glob("tushare_stock_basic_*.csv"))
+    if latest_snapshot:
+        snapshot_map = _parse_basic_info_csv(latest_snapshot[-1])
+        for code, payload in snapshot_map.items():
+            base = merged.get(code, {})
+            merged[code] = {
+                "area": base.get("area") or payload.get("area") or "",
+                "industry": base.get("industry") or payload.get("industry") or "",
+                "market": base.get("market") or payload.get("market") or "",
+                "list_date": base.get("list_date") or payload.get("list_date") or "",
+                "symbol": base.get("symbol") or payload.get("symbol") or "",
+                "ts_code": base.get("ts_code") or payload.get("ts_code") or "",
+                "cnspell": base.get("cnspell") or payload.get("cnspell") or "",
+                "act_name": base.get("act_name") or payload.get("act_name") or "",
+                "act_ent_type": base.get("act_ent_type") or payload.get("act_ent_type") or "",
+            }
+
+    return merged
+
+
+def _resolve_stock_basic_info(stock_code: str) -> dict[str, str]:
+    code = _extract_stock_code(stock_code)
+    if not code:
+        return {}
+    return _load_stock_basic_info_map().get(code, {})
 
 
 @router.get(
@@ -105,6 +201,7 @@ def get_history_list(
                 stock_name=item.get("stock_name"),
                 report_type=item.get("report_type"),
                 sentiment_score=item.get("sentiment_score"),
+                signal_score=item.get("signal_score"),
                 operation_advice=item.get("operation_advice"),
                 created_at=item.get("created_at")
             )
@@ -255,6 +352,8 @@ def get_history_detail(
             report_language,
         )
 
+        basic_info = _resolve_stock_basic_info(result.get("stock_code", ""))
+
         # 构建响应模型
         meta = ReportMeta(
             id=result.get("id"),
@@ -266,7 +365,16 @@ def get_history_detail(
             created_at=result.get("created_at"),
             current_price=current_price,
             change_pct=change_pct,
-            model_used=normalize_model_used(result.get("model_used"))
+            model_used=normalize_model_used(result.get("model_used")),
+            area=basic_info.get("area") or None,
+            industry=basic_info.get("industry") or None,
+            market=basic_info.get("market") or None,
+            list_date=basic_info.get("list_date") or None,
+            symbol=basic_info.get("symbol") or None,
+            ts_code=basic_info.get("ts_code") or None,
+            cnspell=basic_info.get("cnspell") or None,
+            act_name=basic_info.get("act_name") or None,
+            act_ent_type=basic_info.get("act_ent_type") or None,
         )
         
         summary = ReportSummary(

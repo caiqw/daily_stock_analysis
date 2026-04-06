@@ -17,6 +17,7 @@ vi.mock('../../api/analysis', async () => {
     ...actual,
     analysisApi: {
       analyzeAsync: vi.fn(),
+      getUniverseStocks: vi.fn(),
     },
   };
 });
@@ -302,6 +303,44 @@ describe('stockPoolStore', () => {
     expect(state.selectedHistoryIds).toHaveLength(0);
     expect(state.selectedReport).toBeNull();
     expect(state.markdownDrawerOpen).toBe(false);
+  });
+
+  it('loads universe stocks and submits selected batch analysis', async () => {
+    vi.mocked(analysisApi.getUniverseStocks).mockResolvedValue({
+      universe: 'a_share',
+      source: 'tushare',
+      totalSymbols: 2,
+      items: [
+        { stockCode: '600519', stockName: '贵州茅台' },
+        { stockCode: '000001', stockName: '平安银行' },
+      ],
+    });
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({
+      accepted: [
+        { taskId: 'task-1', stockCode: '600519', status: 'pending' },
+      ],
+      duplicates: [
+        { stockCode: '000001', existingTaskId: 'task-x', message: 'dup' },
+      ],
+      message: 'ok',
+    } as never);
+
+    await useStockPoolStore.getState().loadUniverseStocks();
+    useStockPoolStore.getState().toggleUniverseStockSelection('600519');
+    useStockPoolStore.getState().toggleUniverseStockSelection('000001');
+    await useStockPoolStore.getState().submitSelectedUniverseAnalysis();
+
+    const state = useStockPoolStore.getState();
+    expect(state.universeStocks).toHaveLength(2);
+    expect(state.selectedUniverseStockCodes).toHaveLength(0);
+    expect(state.submitFeedback).toContain('已提交 1 只');
+    expect(analysisApi.analyzeAsync).toHaveBeenCalledWith({
+      stockCodes: ['600519', '000001'],
+      reportType: 'detailed',
+      originalQuery: 'universe:a_share:selected',
+      selectionSource: 'import',
+      notify: true,
+    });
   });
 
   it('ignores late task updates after a task has been removed', () => {

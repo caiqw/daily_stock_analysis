@@ -31,6 +31,8 @@ def _reset_auth_globals() -> None:
     auth._session_secret = None
     auth._password_hash_salt = None
     auth._password_hash_stored = None
+    auth._viewer_password_hash_salt = None
+    auth._viewer_password_hash_stored = None
     auth._rate_limit = {}
 
 
@@ -120,6 +122,51 @@ class AuthApiTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"ok":true', response.body)
+
+    def test_login_supports_viewer_password(self) -> None:
+        asyncio.run(
+            auth_endpoint.auth_login(
+                self._build_request(),
+                auth_endpoint.LoginRequest(password="admin123", passwordConfirm="admin123"),
+            )
+        )
+        auth.set_viewer_password("viewer123")
+
+        response = asyncio.run(
+            auth_endpoint.auth_login(
+                self._build_request(),
+                auth_endpoint.LoginRequest(password="viewer123"),
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        cookie_header = response.headers["set-cookie"]
+        token = cookie_header.split("dsa_session=", 1)[1].split(";", 1)[0]
+        payload = auth.parse_session(token)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["role"], auth.ROLE_VIEWER)
+
+    def test_viewer_cannot_update_auth_settings(self) -> None:
+        asyncio.run(
+            auth_endpoint.auth_login(
+                self._build_request(),
+                auth_endpoint.LoginRequest(password="admin123", passwordConfirm="admin123"),
+            )
+        )
+        auth.set_viewer_password("viewer123")
+        viewer_login = asyncio.run(
+            auth_endpoint.auth_login(
+                self._build_request(),
+                auth_endpoint.LoginRequest(password="viewer123"),
+            )
+        )
+        viewer_cookie = viewer_login.headers["set-cookie"].split("dsa_session=", 1)[1].split(";", 1)[0]
+        response = asyncio.run(
+            auth_endpoint.auth_update_settings(
+                self._build_request(cookies={"dsa_session": viewer_cookie}),
+                auth_endpoint.AuthSettingsRequest(authEnabled=True),
+            )
+        )
+        self.assertEqual(response.status_code, 403)
 
     def test_login_wrong_password_returns_401(self) -> None:
         first_response = asyncio.run(

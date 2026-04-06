@@ -3,7 +3,13 @@ import { analysisApi, DuplicateTaskError } from '../api/analysis';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import { historyApi } from '../api/history';
-import type { AnalysisReport, HistoryItem, HistoryListResponse, TaskInfo } from '../types/analysis';
+import type {
+  AnalysisReport,
+  HistoryItem,
+  HistoryListResponse,
+  TaskInfo,
+  UniverseStockItem,
+} from '../types/analysis';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
 import { isObviouslyInvalidStockQuery, looksLikeStockCode, validateStockCode } from '../utils/validation';
 
@@ -36,6 +42,7 @@ export interface StockPoolState {
   notify: boolean;
   inputError?: string;
   duplicateError: string | null;
+  submitFeedback: string | null;
   error: ParsedApiError | null;
   isAnalyzing: boolean;
   historyItems: HistoryItem[];
@@ -48,12 +55,19 @@ export interface StockPoolState {
   selectedReport: AnalysisReport | null;
   isLoadingReport: boolean;
   activeTasks: TaskInfo[];
+  universeStocks: UniverseStockItem[];
+  universeSource: 'tushare' | 'fallback_file' | 'none' | null;
+  isLoadingUniverseStocks: boolean;
+  selectedUniverseStockCodes: string[];
   markdownDrawerOpen: boolean;
+  canAnalyzeRecommendation: boolean;
+  canAnalyzeBatch: boolean;
   setQuery: (query: string) => void;
   clearError: () => void;
   clearInlineMessages: () => void;
   openMarkdownDrawer: () => void;
   closeMarkdownDrawer: () => void;
+  setAnalysisCapabilities: (caps: { canAnalyzeRecommendation: boolean; canAnalyzeBatch: boolean }) => void;
   loadInitialHistory: () => Promise<void>;
   refreshHistory: (silent?: boolean) => Promise<void>;
   loadMoreHistory: () => Promise<void>;
@@ -62,6 +76,12 @@ export interface StockPoolState {
   toggleSelectAllVisible: () => void;
   deleteSelectedHistory: () => Promise<void>;
   submitAnalysis: (options?: SubmitAnalysisOptions) => Promise<void>;
+  submitAllAShareAnalysis: () => Promise<void>;
+  loadUniverseStocks: () => Promise<void>;
+  toggleUniverseStockSelection: (stockCode: string) => void;
+  toggleSelectAllUniverseStocks: (stockCodes: string[]) => void;
+  clearUniverseStockSelection: () => void;
+  submitSelectedUniverseAnalysis: (stockCodes?: string[]) => Promise<void>;
   setNotify: (notify: boolean) => void;
   syncTaskCreated: (task: TaskInfo) => void;
   syncTaskUpdated: (task: TaskInfo) => void;
@@ -76,6 +96,7 @@ const initialState = {
   notify: true,
   inputError: undefined,
   duplicateError: null,
+  submitFeedback: null,
   error: null,
   isAnalyzing: false,
   historyItems: [] as HistoryItem[],
@@ -88,7 +109,13 @@ const initialState = {
   selectedReport: null as AnalysisReport | null,
   isLoadingReport: false,
   activeTasks: [] as TaskInfo[],
+  universeStocks: [] as UniverseStockItem[],
+  universeSource: null as 'tushare' | 'fallback_file' | 'none' | null,
+  isLoadingUniverseStocks: false,
+  selectedUniverseStockCodes: [] as string[],
   markdownDrawerOpen: false,
+  canAnalyzeRecommendation: true,
+  canAnalyzeBatch: true,
 };
 
 function buildHistoryParams(page: number) {
@@ -98,6 +125,20 @@ function buildHistoryParams(page: number) {
     page,
     limit: PAGE_SIZE,
   };
+}
+
+function parseHistoryCreatedAt(value?: string): number {
+  if (!value) return 0;
+  const ts = new Date(value).getTime();
+  return Number.isNaN(ts) ? 0 : ts;
+}
+
+function sortHistoryByCreatedAtDesc(items: HistoryItem[]): HistoryItem[] {
+  return [...items].sort((a, b) => {
+    const timeDiff = parseHistoryCreatedAt(b.createdAt) - parseHistoryCreatedAt(a.createdAt);
+    if (timeDiff !== 0) return timeDiff;
+    return (b.id ?? 0) - (a.id ?? 0);
+  });
 }
 
 async function fetchHistory(
@@ -128,16 +169,16 @@ async function fetchHistory(
       const existingIds = new Set(get().historyItems.map((item) => item.id));
       const newItems = response.items.filter((item) => !existingIds.has(item.id));
       if (newItems.length > 0) {
-        set({ historyItems: [...newItems, ...get().historyItems] });
+        set({ historyItems: sortHistoryByCreatedAtDesc([...newItems, ...get().historyItems]) });
       }
     } else if (reset) {
       set({
-        historyItems: response.items,
+        historyItems: sortHistoryByCreatedAtDesc(response.items),
         currentPage: 1,
       });
     } else {
       set({
-        historyItems: [...get().historyItems, ...response.items],
+        historyItems: sortHistoryByCreatedAtDesc([...get().historyItems, ...response.items]),
         currentPage: page,
       });
     }
@@ -182,18 +223,22 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
       selectionSource: 'manual',
       inputError: undefined,
       duplicateError: null,
+      submitFeedback: null,
     });
   },
 
   clearError: () => set({ error: null }),
 
-  clearInlineMessages: () => set({ inputError: undefined, duplicateError: null }),
+  clearInlineMessages: () => set({ inputError: undefined, duplicateError: null, submitFeedback: null }),
 
   setNotify: (notify) => set({ notify }),
 
   openMarkdownDrawer: () => set({ markdownDrawerOpen: true }),
 
   closeMarkdownDrawer: () => set({ markdownDrawerOpen: false }),
+
+  setAnalysisCapabilities: ({ canAnalyzeRecommendation, canAnalyzeBatch }) =>
+    set({ canAnalyzeRecommendation, canAnalyzeBatch }),
 
   loadInitialHistory: async () => {
     await fetchHistory(get, set, { autoSelectFirst: true, reset: true });
@@ -308,6 +353,17 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     const selectionSource = options?.selectionSource ?? state.selectionSource;
     const originalQuery = (options?.originalQuery ?? state.query).trim();
     const notify = options?.notify ?? state.notify;
+    const originalQueryLower = originalQuery.toLowerCase();
+
+    if (originalQueryLower.startsWith('recommendation:') && !state.canAnalyzeRecommendation) {
+      set({
+        submitFeedback: null,
+        inputError: undefined,
+        duplicateError: null,
+        error: getParsedApiError('当前账号仅支持查看筛股结果，无法提交筛股分析'),
+      });
+      return;
+    }
 
     if (!stockCodeInput) {
       set({ inputError: '请输入股票代码', duplicateError: null });
@@ -332,6 +388,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     set({
       inputError: undefined,
       duplicateError: null,
+      submitFeedback: null,
       error: null,
       isAnalyzing: true,
     });
@@ -367,6 +424,158 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
         return;
       }
 
+      set({ error: getParsedApiError(error) });
+    } finally {
+      if (requestId === analyzeRequestSeq) {
+        set({ isAnalyzing: false });
+      }
+    }
+  },
+
+  submitAllAShareAnalysis: async () => {
+    if (!get().canAnalyzeBatch || !get().canAnalyzeRecommendation) {
+      set({
+        error: getParsedApiError('当前账号无权限提交全市场批量分析'),
+      });
+      return;
+    }
+    if (get().isAnalyzing) {
+      return;
+    }
+
+    const requestId = ++analyzeRequestSeq;
+    set({
+      inputError: undefined,
+      duplicateError: null,
+      submitFeedback: null,
+      error: null,
+      isAnalyzing: true,
+    });
+
+    try {
+      const response = await analysisApi.analyzeUniverse({
+        universe: 'a_share',
+        notify: get().notify,
+      });
+      if (requestId !== analyzeRequestSeq) {
+        return;
+      }
+      set({ submitFeedback: response.message });
+    } catch (error) {
+      if (requestId !== analyzeRequestSeq) {
+        return;
+      }
+      set({ error: getParsedApiError(error) });
+    } finally {
+      if (requestId === analyzeRequestSeq) {
+        set({ isAnalyzing: false });
+      }
+    }
+  },
+
+  loadUniverseStocks: async () => {
+    if (get().isLoadingUniverseStocks) {
+      return;
+    }
+    set({ isLoadingUniverseStocks: true, error: null });
+    try {
+      const response = await analysisApi.getUniverseStocks();
+      const stocks = response.items ?? [];
+      const validCodeSet = new Set(stocks.map((item) => item.stockCode));
+      set({
+        universeStocks: stocks,
+        universeSource: response.source,
+        selectedUniverseStockCodes: get().selectedUniverseStockCodes.filter((code) => validCodeSet.has(code)),
+      });
+    } catch (error) {
+      set({ error: getParsedApiError(error) });
+    } finally {
+      set({ isLoadingUniverseStocks: false });
+    }
+  },
+
+  toggleUniverseStockSelection: (stockCode) => {
+    const selected = new Set(get().selectedUniverseStockCodes);
+    if (selected.has(stockCode)) {
+      selected.delete(stockCode);
+    } else {
+      selected.add(stockCode);
+    }
+    set({ selectedUniverseStockCodes: Array.from(selected) });
+  },
+
+  toggleSelectAllUniverseStocks: (stockCodes) => {
+    const selected = new Set(get().selectedUniverseStockCodes);
+    const allSelected = stockCodes.length > 0 && stockCodes.every((code) => selected.has(code));
+    if (allSelected) {
+      for (const code of stockCodes) {
+        selected.delete(code);
+      }
+    } else {
+      for (const code of stockCodes) {
+        selected.add(code);
+      }
+    }
+    set({ selectedUniverseStockCodes: Array.from(selected) });
+  },
+
+  clearUniverseStockSelection: () => {
+    set({ selectedUniverseStockCodes: [] });
+  },
+
+  submitSelectedUniverseAnalysis: async (stockCodes) => {
+    if (!get().canAnalyzeBatch || !get().canAnalyzeRecommendation) {
+      set({
+        error: getParsedApiError('当前账号无权限提交筛股批量分析'),
+      });
+      return;
+    }
+    const selectedCodes = Array.from(new Set(stockCodes ?? get().selectedUniverseStockCodes));
+    if (selectedCodes.length === 0 || get().isAnalyzing) {
+      return;
+    }
+    set({
+      inputError: undefined,
+      duplicateError: null,
+      submitFeedback: null,
+      error: null,
+      isAnalyzing: true,
+    });
+    const requestId = ++analyzeRequestSeq;
+    try {
+      const response = await analysisApi.analyzeAsync({
+        stockCodes: selectedCodes,
+        reportType: 'detailed',
+        originalQuery: 'universe:a_share:selected',
+        selectionSource: 'import',
+        notify: get().notify,
+      });
+      if (requestId !== analyzeRequestSeq) {
+        return;
+      }
+      if ('accepted' in response && 'duplicates' in response) {
+        set({
+          submitFeedback: `已提交 ${response.accepted.length} 只，重复跳过 ${response.duplicates.length} 只`,
+          selectedUniverseStockCodes: [],
+        });
+      } else {
+        set({
+          submitFeedback: selectedCodes.length === 1
+            ? `已提交 ${selectedCodes[0]} 分析任务`
+            : `已提交 ${selectedCodes.length} 只股票分析任务`,
+          selectedUniverseStockCodes: [],
+        });
+      }
+    } catch (error) {
+      if (requestId !== analyzeRequestSeq) {
+        return;
+      }
+      if (error instanceof DuplicateTaskError) {
+        set({
+          duplicateError: `股票 ${error.stockCode} 正在分析中，请等待完成`,
+        });
+        return;
+      }
       set({ error: getParsedApiError(error) });
     } finally {
       if (requestId === analyzeRequestSeq) {

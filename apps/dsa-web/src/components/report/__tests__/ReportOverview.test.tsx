@@ -9,6 +9,15 @@ const baseMeta = {
   reportType: 'detailed' as const,
   reportLanguage: 'zh' as const,
   createdAt: '2026-03-21T08:00:00Z',
+  industry: '白酒',
+  area: '贵州',
+  market: '主板',
+  listDate: '20010827',
+  symbol: '600519',
+  tsCode: '600519.SH',
+  cnspell: 'MOUTAI',
+  actName: '国务院国有资产监督管理委员会',
+  actEntType: '中央企业',
 };
 
 const baseSummary = {
@@ -46,6 +55,16 @@ describe('ReportOverview', () => {
     expect(screen.getByText('领跌')).toBeInTheDocument();
     expect(screen.getByText('-1.20%')).toBeInTheDocument();
     expect(screen.queryByText('中性')).not.toBeInTheDocument();
+    expect(screen.getByText('基础信息')).toBeInTheDocument();
+    expect(screen.getByText('白酒')).toBeInTheDocument();
+    expect(screen.getByText('贵州')).toBeInTheDocument();
+    expect(screen.getByText('2001-08-27')).toBeInTheDocument();
+    expect(screen.queryByText('600519.SH')).not.toBeInTheDocument();
+    expect(screen.getByText('国务院国有资产监督管理委员会')).toBeInTheDocument();
+    expect(screen.queryByText('报告类型')).not.toBeInTheDocument();
+    expect(screen.queryByText('报告语言')).not.toBeInTheDocument();
+    expect(screen.queryByText('查询 ID')).not.toBeInTheDocument();
+    expect(screen.queryByText('记录 ID')).not.toBeInTheDocument();
   });
 
   it('shows board list when rankings are unavailable', () => {

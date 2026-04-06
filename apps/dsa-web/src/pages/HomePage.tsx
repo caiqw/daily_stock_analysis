@@ -19,6 +19,7 @@ const HomePage: React.FC = () => {
     query,
     inputError,
     duplicateError,
+    submitFeedback,
     error,
     isAnalyzing,
     historyItems,
@@ -109,7 +110,12 @@ const HomePage: React.FC = () => {
       <div className="flex min-h-0 h-full flex-col gap-3 overflow-hidden">
         <TaskPanel tasks={activeTasks} />
         <HistoryList
-          items={historyItems}
+          items={[...historyItems].sort((a, b) => {
+            const aTs = Number.isNaN(new Date(a.createdAt).getTime()) ? 0 : new Date(a.createdAt).getTime();
+            const bTs = Number.isNaN(new Date(b.createdAt).getTime()) ? 0 : new Date(b.createdAt).getTime();
+            if (aTs !== bTs) return bTs - aTs;
+            return (b.id ?? 0) - (a.id ?? 0);
+          })}
           isLoading={isLoadingHistory}
           isLoadingMore={isLoadingMore}
           hasMore={hasMore}
@@ -146,7 +152,7 @@ const HomePage: React.FC = () => {
       data-testid="home-dashboard"
       className="flex h-[calc(100vh-5rem)] w-full flex-col overflow-hidden md:flex-row sm:h-[calc(100vh-5.5rem)] lg:h-[calc(100vh-2rem)]"
     >
-      <div className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full lg:max-w-6xl mx-auto w-full">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full lg:mr-auto 2xl:max-w-[1540px]">
         <header className="flex min-w-0 flex-shrink-0 items-center overflow-hidden px-3 py-3 md:px-4 md:py-4">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2.5 md:flex-nowrap">
             <button
@@ -200,7 +206,7 @@ const HomePage: React.FC = () => {
           </div>
         </header>
 
-        {inputError || duplicateError ? (
+        {inputError || duplicateError || submitFeedback ? (
           <div className="px-3 pb-2 md:px-4">
             {inputError ? (
               <InlineAlert
@@ -215,6 +221,14 @@ const HomePage: React.FC = () => {
                 variant="warning"
                 title="任务已存在"
                 message={duplicateError}
+                className="rounded-xl px-3 py-2 text-xs shadow-none"
+              />
+            ) : null}
+            {!inputError && !duplicateError && submitFeedback ? (
+              <InlineAlert
+                variant="success"
+                title="提交成功"
+                message={submitFeedback}
                 className="rounded-xl px-3 py-2 text-xs shadow-none"
               />
             ) : null}
@@ -251,7 +265,7 @@ const HomePage: React.FC = () => {
                 <DashboardStateBlock title="加载报告中..." loading />
               </div>
             ) : selectedReport ? (
-              <div className="max-w-4xl space-y-4 pb-8">
+              <div className="w-full max-w-none space-y-4 pb-8">
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <Button
                     variant="home-action-ai"

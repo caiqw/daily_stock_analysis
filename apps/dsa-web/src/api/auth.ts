@@ -3,7 +3,16 @@ import apiClient from './index';
 export type AuthStatusResponse = {
   authEnabled: boolean;
   loggedIn: boolean;
+  role?: 'super_admin' | 'viewer' | null;
+  capabilities?: {
+    canAccessSettings: boolean;
+    canUseTheme: boolean;
+    canAnalyzeHome: boolean;
+    canAnalyzeRecommendation: boolean;
+    canAnalyzeBatch: boolean;
+  };
   passwordSet?: boolean;
+  viewerPasswordSet?: boolean;
   passwordChangeable?: boolean;
   setupState: 'enabled' | 'password_retained' | 'no_password';
 };
@@ -39,10 +48,17 @@ export const authApi = {
     return data;
   },
 
-  async login(password: string, passwordConfirm?: string): Promise<void> {
-    const body: { password: string; passwordConfirm?: string } = { password };
+  async login(
+    password: string,
+    passwordConfirm?: string,
+    role?: 'super_admin' | 'viewer'
+  ): Promise<void> {
+    const body: { password: string; passwordConfirm?: string; role?: 'super_admin' | 'viewer' } = { password };
     if (passwordConfirm !== undefined) {
       body.passwordConfirm = passwordConfirm;
+    }
+    if (role !== undefined) {
+      body.role = role;
     }
     await apiClient.post('/api/v1/auth/login', body);
   },

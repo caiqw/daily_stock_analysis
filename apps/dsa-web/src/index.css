@@ -1786,6 +1786,58 @@ textarea {
   box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.44);
 }
 
+.rec-score-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 9999px;
+  border: 1px solid var(--home-panel-border);
+  padding: 0.2rem 0.55rem;
+  line-height: 1;
+  color: hsl(var(--secondary-text));
+  background: hsl(var(--foreground) / 0.04);
+  white-space: nowrap;
+}
+
+.rec-score-chip strong {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--foreground) / 0.92);
+}
+
+.rec-score-chip-signal {
+  border-color: hsl(var(--primary) / 0.28);
+  background: hsl(var(--primary) / 0.08);
+  color: hsl(var(--primary));
+}
+
+.rec-score-chip-sentiment {
+  border-color: hsl(247 84% 66% / 0.26);
+  background: hsl(247 84% 66% / 0.08);
+  color: hsl(247 84% 66%);
+}
+
+.rec-insight-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 9999px;
+  border: 1px solid var(--home-panel-border);
+  background: hsl(var(--foreground) / 0.035);
+  padding: 0.18rem 0.55rem;
+  line-height: 1.25;
+}
+
+.rec-insight-chip-label {
+  color: hsl(var(--muted-text));
+}
+
+.rec-insight-chip-value {
+  color: hsl(var(--secondary-text));
+  font-weight: 600;
+}
+
 .dark .home-report-hero {
   --terminal-card-border: var(--home-panel-border-selected);
   --terminal-card-gradient-start: hsl(var(--primary) / 0.22);

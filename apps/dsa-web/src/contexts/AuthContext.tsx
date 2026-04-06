@@ -7,12 +7,25 @@ import { useStockPoolStore } from '../stores';
 type AuthContextValue = {
   authEnabled: boolean;
   loggedIn: boolean;
+  role: 'super_admin' | 'viewer' | null;
+  capabilities: {
+    canAccessSettings: boolean;
+    canUseTheme: boolean;
+    canAnalyzeHome: boolean;
+    canAnalyzeRecommendation: boolean;
+    canAnalyzeBatch: boolean;
+  };
   passwordSet: boolean;
+  viewerPasswordSet: boolean;
   passwordChangeable: boolean;
   setupState: 'enabled' | 'password_retained' | 'no_password';
   isLoading: boolean;
   loadError: ParsedApiError | null;
-  login: (password: string, passwordConfirm?: string) => Promise<{ success: boolean; error?: ParsedApiError }>;
+  login: (
+    password: string,
+    passwordConfirm?: string,
+    role?: 'super_admin' | 'viewer'
+  ) => Promise<{ success: boolean; error?: ParsedApiError }>;
   changePassword: (
     currentPassword: string,
     newPassword: string,
@@ -23,6 +36,14 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+const defaultCapabilities = {
+  canAccessSettings: false,
+  canUseTheme: false,
+  canAnalyzeHome: false,
+  canAnalyzeRecommendation: false,
+  canAnalyzeBatch: false,
+};
 
 function extractLoginError(err: unknown): ParsedApiError {
   const parsed = getParsedApiError(err);
@@ -41,7 +62,10 @@ function extractLoginError(err: unknown): ParsedApiError {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [role, setRole] = useState<'super_admin' | 'viewer' | null>(null);
+  const [capabilities, setCapabilities] = useState(defaultCapabilities);
   const [passwordSet, setPasswordSet] = useState(false);
+  const [viewerPasswordSet, setViewerPasswordSet] = useState(false);
   const [passwordChangeable, setPasswordChangeable] = useState(false);
   const [setupState, setSetupState] = useState<'enabled' | 'password_retained' | 'no_password'>('no_password');
   const [isLoading, setIsLoading] = useState(true);
@@ -54,9 +78,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const status = await authApi.getStatus();
       setAuthEnabled(status.authEnabled);
       setLoggedIn(status.loggedIn);
+      setRole(status.role ?? null);
+      setCapabilities(status.capabilities ?? defaultCapabilities);
       setPasswordSet(status.passwordSet ?? false);
+      setViewerPasswordSet(status.viewerPasswordSet ?? false);
       setPasswordChangeable(status.passwordChangeable ?? false);
       setSetupState(status.setupState);
+      useStockPoolStore.getState().setAnalysisCapabilities({
+        canAnalyzeRecommendation: status.capabilities?.canAnalyzeRecommendation ?? true,
+        canAnalyzeBatch: status.capabilities?.canAnalyzeBatch ?? true,
+      });
       if (status.authEnabled && !status.loggedIn) {
         useStockPoolStore.getState().resetDashboardState();
       }
@@ -64,9 +95,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoadError(getParsedApiError(err));
       setAuthEnabled(false);
       setLoggedIn(false);
+      setRole(null);
+      setCapabilities(defaultCapabilities);
       setPasswordSet(false);
+      setViewerPasswordSet(false);
       setPasswordChangeable(false);
       setSetupState('no_password');
+      useStockPoolStore.getState().setAnalysisCapabilities({
+        canAnalyzeRecommendation: true,
+        canAnalyzeBatch: true,
+      });
       useStockPoolStore.getState().resetDashboardState();
     } finally {
       setIsLoading(false);
@@ -80,10 +118,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(
     async (
       password: string,
-      passwordConfirm?: string
+      passwordConfirm?: string,
+      role?: 'super_admin' | 'viewer'
     ): Promise<{ success: boolean; error?: ParsedApiError }> => {
       try {
-        await authApi.login(password, passwordConfirm);
+        await authApi.login(password, passwordConfirm, role);
         await fetchStatus();
         return { success: true };
       } catch (err: unknown) {
@@ -129,7 +168,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         authEnabled,
         loggedIn,
+        role,
+        capabilities,
         passwordSet,
+        viewerPasswordSet,
         passwordChangeable,
         setupState,
         isLoading,

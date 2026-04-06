@@ -29,6 +29,10 @@ class StockQuote(BaseModel):
     volume: Optional[float] = Field(None, description="成交量（股）")
     amount: Optional[float] = Field(None, description="成交额（元）")
     update_time: Optional[str] = Field(None, description="更新时间")
+    pe_ratio: Optional[float] = Field(None, description="市盈率（动态）")
+    pb_ratio: Optional[float] = Field(None, description="市净率")
+    total_mv: Optional[float] = Field(None, description="总市值（元）")
+    circ_mv: Optional[float] = Field(None, description="流通市值（元）")
     
     class Config:
         json_schema_extra = {
@@ -44,9 +48,64 @@ class StockQuote(BaseModel):
                 "prev_close": 1785.00,
                 "volume": 10000000,
                 "amount": 18000000000,
-                "update_time": "2024-01-01T15:00:00"
+                "update_time": "2024-01-01T15:00:00",
+                "pe_ratio": 18.2,
+                "pb_ratio": 3.8,
+                "total_mv": 2250000000000,
+                "circ_mv": 2240000000000,
             }
         }
+
+
+class StockCompanyProfile(BaseModel):
+    """公司简介与主营信息"""
+
+    stock_code: str = Field(..., description="股票代码")
+    stock_name: Optional[str] = Field(None, description="股票名称")
+    company_name: Optional[str] = Field(None, description="公司全称")
+    company_intro: Optional[str] = Field(None, description="公司介绍")
+    main_business: Optional[str] = Field(None, description="主营业务")
+    business_scope: Optional[str] = Field(None, description="业务范围")
+    industry: Optional[str] = Field(None, description="行业")
+    area: Optional[str] = Field(None, description="地域")
+    market: Optional[str] = Field(None, description="市场板块")
+    list_date: Optional[str] = Field(None, description="上市日期（YYYYMMDD）")
+    act_name: Optional[str] = Field(None, description="实控人名称")
+    act_ent_type: Optional[str] = Field(None, description="实控人企业性质")
+    source_chain: List[str] = Field(default_factory=list, description="数据来源链路")
+
+
+class StockFinancialMetrics(BaseModel):
+    """结构化财务指标"""
+
+    stock_code: str = Field(..., description="股票代码")
+    as_of: Optional[str] = Field(None, description="指标口径时间")
+    pe_ratio: Optional[float] = Field(None, description="市盈率（动态）")
+    pb_ratio: Optional[float] = Field(None, description="市净率")
+    ps_ratio: Optional[float] = Field(None, description="市销率")
+    peg_ratio: Optional[float] = Field(None, description="PEG")
+    dividend_yield: Optional[float] = Field(None, description="股息率（%）")
+    total_mv: Optional[float] = Field(None, description="总市值（元）")
+    circ_mv: Optional[float] = Field(None, description="流通市值（元）")
+    roe: Optional[float] = Field(None, description="净资产收益率（%）")
+    roa: Optional[float] = Field(None, description="总资产收益率（%）")
+    gross_margin: Optional[float] = Field(None, description="毛利率（%）")
+    net_margin: Optional[float] = Field(None, description="净利率（%）")
+    debt_ratio: Optional[float] = Field(None, description="资产负债率（%）")
+    revenue: Optional[float] = Field(None, description="营收")
+    net_profit_parent: Optional[float] = Field(None, description="归母净利润")
+    operating_cash_flow: Optional[float] = Field(None, description="经营现金流")
+    revenue_yoy: Optional[float] = Field(None, description="营收同比（%）")
+    net_profit_yoy: Optional[float] = Field(None, description="净利润同比（%）")
+    source_chain: List[str] = Field(default_factory=list, description="数据来源链路")
+
+
+class StockCompanyInsightsResponse(BaseModel):
+    """公司信息与财务指标联合响应"""
+
+    stock_code: str = Field(..., description="股票代码")
+    profile: StockCompanyProfile = Field(..., description="公司介绍与主营信息")
+    financial_metrics: StockFinancialMetrics = Field(..., description="财务指标")
 
 
 class KLineData(BaseModel):

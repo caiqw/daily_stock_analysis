@@ -28,6 +28,12 @@ class HistoryItem(BaseModel):
         ge=0,
         le=100
     )
+    signal_score: Optional[int] = Field(
+        None,
+        description="技术面信号分 (0-100)",
+        ge=0,
+        le=100
+    )
     operation_advice: Optional[str] = Field(None, description="操作建议")
     created_at: Optional[str] = Field(None, description="创建时间")
     
@@ -40,6 +46,7 @@ class HistoryItem(BaseModel):
                 "stock_name": "贵州茅台",
                 "report_type": "detailed",
                 "sentiment_score": 75,
+                "signal_score": 68,
                 "operation_advice": "持有",
                 "created_at": "2024-01-01T12:00:00"
             }
@@ -124,6 +131,15 @@ class ReportMeta(BaseModel):
     current_price: Optional[float] = Field(None, description="分析时股价")
     change_pct: Optional[float] = Field(None, description="分析时涨跌幅(%)")
     model_used: Optional[str] = Field(None, description="分析使用的 LLM 模型")
+    area: Optional[str] = Field(None, description="地域")
+    industry: Optional[str] = Field(None, description="行业")
+    market: Optional[str] = Field(None, description="市场板块")
+    list_date: Optional[str] = Field(None, description="上市日期（YYYYMMDD）")
+    symbol: Optional[str] = Field(None, description="证券代码（不含交易所后缀）")
+    ts_code: Optional[str] = Field(None, description="Tushare 代码")
+    cnspell: Optional[str] = Field(None, description="拼音缩写")
+    act_name: Optional[str] = Field(None, description="实控人名称")
+    act_ent_type: Optional[str] = Field(None, description="实控人企业性质")
 
 
 class ReportSummary(BaseModel):

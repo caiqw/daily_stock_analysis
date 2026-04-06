@@ -10,7 +10,7 @@ import { useAuth } from '../hooks';
 import { SettingsAlert } from '../components/settings';
 
 const LoginPage: React.FC = () => {
-  const { login, passwordSet, setupState } = useAuth();
+  const { login, passwordSet, setupState, viewerPasswordSet } = useAuth();
   const navigate = useNavigate();
 
   // Set page title
@@ -24,6 +24,7 @@ const LoginPage: React.FC = () => {
 
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [loginRole, setLoginRole] = useState<'super_admin' | 'viewer'>('super_admin');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | ParsedApiError | null>(null);
 
@@ -57,7 +58,11 @@ const LoginPage: React.FC = () => {
     }
     setIsSubmitting(true);
     try {
-      const result = await login(password, isFirstTime ? passwordConfirm : undefined);
+      const result = await login(
+        password,
+        isFirstTime ? passwordConfirm : undefined,
+        isFirstTime ? 'super_admin' : loginRole
+      );
       if (result.success) {
         navigate(redirect, { replace: true });
       } else {
@@ -159,15 +164,50 @@ const LoginPage: React.FC = () => {
                 ) : (
                   <>
                     <Lock className="h-5 w-5 text-[var(--login-accent-text)]" />
-                    <span>管理员登录</span>
+                    <span>{loginRole === 'super_admin' ? '管理员登录' : '普通用户登录'}</span>
                   </>
                 )}
               </h1>
               <p className="mt-2 text-sm text-[var(--login-text-secondary)]">
                 {isFirstTime
                   ? '首次启用认证，请为系统工作台设置管理员密码。'
-                  : '访问 DSA 量化决策引擎需要有效的身份凭证。'}
+                  : loginRole === 'super_admin'
+                    ? '访问 DSA 量化决策引擎需要超级管理员凭证。'
+                    : '普通用户可登录查看报告与首页分析能力。'}
               </p>
+              {!isFirstTime ? (
+                <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl border border-[var(--login-border-card)] bg-[var(--login-bg-main)]/40 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setLoginRole('super_admin')}
+                    disabled={isSubmitting}
+                    className={`rounded-lg px-3 py-2 text-sm transition ${
+                      loginRole === 'super_admin'
+                        ? 'bg-[var(--login-brand-button-start)] text-white'
+                        : 'text-[var(--login-text-secondary)] hover:bg-white/5'
+                    }`}
+                  >
+                    管理员
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLoginRole('viewer')}
+                    disabled={isSubmitting}
+                    className={`rounded-lg px-3 py-2 text-sm transition ${
+                      loginRole === 'viewer'
+                        ? 'bg-[var(--login-brand-button-start)] text-white'
+                        : 'text-[var(--login-text-secondary)] hover:bg-white/5'
+                    }`}
+                  >
+                    普通用户
+                  </button>
+                </div>
+              ) : null}
+              {!isFirstTime && loginRole === 'viewer' && !viewerPasswordSet ? (
+                <p className="mt-3 text-xs text-amber-300">
+                  普通用户密码未初始化，请先在服务器执行 `python -m src.auth reset_viewer_password`。
+                </p>
+              ) : null}
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-6">
@@ -178,8 +218,14 @@ const LoginPage: React.FC = () => {
                   appearance="login"
                   allowTogglePassword
                   iconType="password"
-                  label={isFirstTime ? '管理员密码' : '登录密码'}
-                  placeholder={isFirstTime ? '请设置 6 位以上密码' : '请输入密码'}
+                  label={isFirstTime ? '管理员密码' : loginRole === 'super_admin' ? '管理员密码' : '普通用户密码'}
+                  placeholder={
+                    isFirstTime
+                      ? '请设置 6 位以上密码'
+                      : loginRole === 'super_admin'
+                        ? '请输入管理员密码'
+                        : '请输入普通用户密码'
+                  }
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isSubmitting}

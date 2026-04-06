@@ -2,6 +2,9 @@ import apiClient from './index';
 import { toCamelCase } from './utils';
 import type {
   AnalysisRequest,
+  AnalyzeUniverseRequest,
+  AnalyzeUniverseResponse,
+  UniverseStockListResponse,
   AnalysisResult,
   AnalyzeResponse,
   AnalyzeAsyncResponse,
@@ -44,6 +47,37 @@ export const analysisApi = {
     }
 
     return result;
+  },
+
+  /**
+   * Trigger universe analysis in async mode.
+   */
+  analyzeUniverse: async (data: AnalyzeUniverseRequest = {}): Promise<AnalyzeUniverseResponse> => {
+    const requestData = {
+      universe: data.universe || 'a_share',
+      ...(data.notify !== undefined && { notify: data.notify }),
+      ...(data.chunkSize !== undefined && { chunk_size: data.chunkSize }),
+    };
+
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/analysis/analyze-universe',
+      requestData,
+      {
+        validateStatus: (status) => status === 202 || status === 200,
+      }
+    );
+
+    return toCamelCase<AnalyzeUniverseResponse>(response.data);
+  },
+
+  /**
+   * Get A-share universe stock list.
+   */
+  getUniverseStocks: async (): Promise<UniverseStockListResponse> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      '/api/v1/analysis/universe/a-share'
+    );
+    return toCamelCase<UniverseStockListResponse>(response.data);
   },
 
   /**

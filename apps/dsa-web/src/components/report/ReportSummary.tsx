@@ -1,6 +1,10 @@
-import React from 'react';
-import type { AnalysisResult, AnalysisReport } from '../../types/analysis';
+import React, { useEffect, useState } from 'react';
+import type { AnalysisResult, AnalysisReport, StockCompanyInsightsResponse } from '../../types/analysis';
+import { stocksApi } from '../../api/stocks';
 import { ReportOverview } from './ReportOverview';
+import { CompanyProfileCard } from './CompanyProfileCard';
+import { FinancialMetricsCard } from './FinancialMetricsCard';
+import { ReportPriceChart } from './ReportPriceChart';
 import { ReportStrategy } from './ReportStrategy';
 import { ReportNews } from './ReportNews';
 import { ReportDetails } from './ReportDetails';
@@ -27,10 +31,45 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
   const { meta, summary, strategy, details } = report;
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
   const text = getReportText(reportLanguage);
+  const [insights, setInsights] = useState<StockCompanyInsightsResponse | null>(null);
+  const [isLoadingInsights, setIsLoadingInsights] = useState(false);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
   const modelUsed = (meta.modelUsed || '').trim();
   const shouldShowModel = Boolean(
     modelUsed && !['unknown', 'error', 'none', 'null', 'n/a'].includes(modelUsed.toLowerCase()),
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const stockCode = (meta.stockCode || '').trim();
+    if (!stockCode) {
+      setInsights(null);
+      setInsightsError(null);
+      setIsLoadingInsights(false);
+      return;
+    }
+
+    setIsLoadingInsights(true);
+    setInsightsError(null);
+    void stocksApi.getInsights(stockCode)
+      .then((resp) => {
+        if (cancelled) return;
+        setInsights(resp);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInsights(null);
+        setInsightsError(text.companyInsightsUnavailable);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingInsights(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [meta.stockCode, text.companyInsightsUnavailable]);
 
   return (
     <div className="space-y-5 pb-8 animate-fade-in">
@@ -41,6 +80,22 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         details={details}
         isHistory={isHistory}
       />
+
+      <CompanyProfileCard
+        profile={insights?.profile}
+        language={reportLanguage}
+        loading={isLoadingInsights}
+        errorText={insightsError}
+      />
+
+      <FinancialMetricsCard
+        metrics={insights?.financialMetrics}
+        language={reportLanguage}
+        loading={isLoadingInsights}
+        errorText={insightsError}
+      />
+
+      <ReportPriceChart stockCode={meta.stockCode} />
 
       {/* 策略点位区 */}
       <ReportStrategy strategy={strategy} language={reportLanguage} />

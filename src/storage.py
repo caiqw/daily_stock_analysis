@@ -225,6 +225,7 @@ class AnalysisHistory(Base):
 
     # 核心结论
     sentiment_score = Column(Integer)
+    signal_score = Column(Integer)
     operation_advice = Column(String(20))
     trend_prediction = Column(String(50))
     analysis_summary = Column(Text)
@@ -255,6 +256,7 @@ class AnalysisHistory(Base):
             'name': self.name,
             'report_type': self.report_type,
             'sentiment_score': self.sentiment_score,
+            'signal_score': self.signal_score,
             'operation_advice': self.operation_advice,
             'trend_prediction': self.trend_prediction,
             'analysis_summary': self.analysis_summary,
@@ -670,12 +672,33 @@ class DatabaseManager:
         
         # 创建所有表
         Base.metadata.create_all(self._engine)
+        self._ensure_schema_compatibility()
 
         self._initialized = True
         logger.info(f"数据库初始化完成: {db_url}")
 
         # 注册退出钩子，确保程序退出时关闭数据库连接
         atexit.register(DatabaseManager._cleanup_engine, self._engine)
+
+    def _ensure_schema_compatibility(self) -> None:
+        """
+        Ensure incremental schema compatibility for SQLite deployments.
+
+        SQLite's create_all does not add new columns to existing tables. This
+        lightweight compatibility hook keeps upgrades fail-open for users with
+        long-lived local databases.
+        """
+        try:
+            with self._engine.begin() as conn:
+                if conn.dialect.name != "sqlite":
+                    return
+                columns = conn.exec_driver_sql("PRAGMA table_info('analysis_history')").fetchall()
+                existing = {row[1] for row in columns}
+                if "signal_score" not in existing:
+                    conn.exec_driver_sql("ALTER TABLE analysis_history ADD COLUMN signal_score INTEGER")
+                    logger.info("数据库兼容升级：analysis_history.signal_score 已添加")
+        except Exception as exc:
+            logger.warning("数据库兼容升级检查失败（继续运行）: %s", exc)
     
     @classmethod
     def get_instance(cls) -> 'DatabaseManager':
@@ -1082,6 +1105,7 @@ class DatabaseManager:
             name=result.name,
             report_type=report_type,
             sentiment_score=result.sentiment_score,
+            signal_score=self._extract_signal_score(result),
             operation_advice=result.operation_advice,
             trend_prediction=result.trend_prediction,
             analysis_summary=result.analysis_summary,
@@ -1193,7 +1217,12 @@ class DatabaseManager:
             data_query = (
                 select(AnalysisHistory)
                 .where(where_clause)
-                .order_by(desc(AnalysisHistory.created_at))
+                .order_by(
+                    # 先保证最新分析优先展示，避免刚完成的记录被高分旧记录挤出首屏。
+                    desc(AnalysisHistory.created_at),
+                    desc(func.coalesce(AnalysisHistory.signal_score, -1)),
+                    desc(func.coalesce(AnalysisHistory.sentiment_score, -1)),
+                )
                 .offset(offset)
                 .limit(limit)
             )
@@ -1537,6 +1566,42 @@ class DatabaseManager:
             'raw_response': getattr(result, 'raw_response', None),
         })
         return data
+
+    @staticmethod
+    def _normalize_score(value: Any) -> Optional[int]:
+        """Normalize a score-like value into integer 0-100."""
+        if value is None:
+            return None
+        try:
+            score = int(round(float(value)))
+        except (TypeError, ValueError):
+            return None
+        if score < 0 or score > 100:
+            return None
+        return score
+
+    @classmethod
+    def _extract_signal_score(cls, result: Any) -> Optional[int]:
+        """
+        Extract technical signal score from AnalysisResult-like objects.
+
+        Preferred order:
+        1. result.signal_score
+        2. result.dashboard.data_perspective.trend_status.trend_score
+        """
+        direct = cls._normalize_score(getattr(result, "signal_score", None))
+        if direct is not None:
+            return direct
+
+        dashboard = getattr(result, "dashboard", None)
+        if isinstance(dashboard, dict):
+            trend_score = (
+                ((dashboard.get("data_perspective") or {}).get("trend_status") or {}).get("trend_score")
+            )
+            normalized = cls._normalize_score(trend_score)
+            if normalized is not None:
+                return normalized
+        return None
 
     @staticmethod
     def _parse_sniper_value(value: Any) -> Optional[float]:

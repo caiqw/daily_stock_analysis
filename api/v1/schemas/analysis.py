@@ -87,6 +87,35 @@ class AnalyzeRequest(BaseModel):
         }
 
 
+class AnalyzeUniverseRequest(BaseModel):
+    """Universe analysis request parameters."""
+
+    universe: str = Field(
+        "a_share",
+        description="股票池标识，当前仅支持 a_share",
+        pattern="^a_share$",
+    )
+    notify: bool = Field(
+        True,
+        description="是否发送推送通知（Telegram/企业微信等）",
+    )
+    chunk_size: Optional[int] = Field(
+        None,
+        description="单批入队数量（为空时使用后端默认配置）",
+        ge=1,
+        le=100,
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "universe": "a_share",
+                "notify": True,
+                "chunk_size": 50,
+            }
+        }
+
+
 class AnalysisResultResponse(BaseModel):
     """分析结果响应模型"""
     
@@ -200,6 +229,92 @@ class BatchTaskAcceptedResponse(BaseModel):
                     }
                 ],
                 "message": "已提交 1 个任务，1 个重复跳过"
+            }
+        }
+
+
+class AnalyzeUniverseAcceptedResponse(BaseModel):
+    """Universe async submission summary."""
+
+    universe: str = Field(..., description="股票池标识")
+    source: str = Field(..., description="股票池来源：tushare 或 fallback_file")
+    total_symbols: int = Field(..., description="股票池总数量")
+    chunk_size: int = Field(..., description="分批大小")
+    chunk_count: int = Field(..., description="分批数量")
+    submitted_tasks: int = Field(..., description="本次成功提交任务数量")
+    duplicate_tasks: int = Field(..., description="重复跳过任务数量")
+    sample_task_ids: List[str] = Field(default_factory=list, description="示例任务 ID（最多前 10 个）")
+    message: str = Field(..., description="汇总信息")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "universe": "a_share",
+                "source": "tushare",
+                "total_symbols": 5310,
+                "chunk_size": 50,
+                "chunk_count": 107,
+                "submitted_tasks": 5288,
+                "duplicate_tasks": 22,
+                "sample_task_ids": ["task_xxx1", "task_xxx2"],
+                "message": "已提交全A分析任务：总计 5310 只，成功 5288，重复跳过 22",
+            }
+        }
+
+
+class UniverseStockItem(BaseModel):
+    """Universe stock item."""
+
+    stock_code: str = Field(..., description="股票代码")
+    stock_name: Optional[str] = Field(None, description="股票名称")
+    area: Optional[str] = Field(None, description="地域")
+    industry: Optional[str] = Field(None, description="行业")
+    market: Optional[str] = Field(None, description="市场板块")
+    list_date: Optional[str] = Field(None, description="上市日期（YYYYMMDD）")
+    symbol: Optional[str] = Field(None, description="证券代码（不带后缀）")
+    ts_code: Optional[str] = Field(None, description="Tushare 标准代码")
+    cnspell: Optional[str] = Field(None, description="股票名称拼音缩写")
+    act_name: Optional[str] = Field(None, description="实控人名称")
+    act_ent_type: Optional[str] = Field(None, description="实控人企业性质")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "stock_code": "600519",
+                "stock_name": "贵州茅台",
+                "area": "贵州",
+                "industry": "白酒",
+                "market": "主板",
+                "list_date": "20010827",
+                "symbol": "600519",
+                "ts_code": "600519.SH",
+                "cnspell": "GZMT",
+                "act_name": "贵州省人民政府国有资产监督管理委员会",
+                "act_ent_type": "地方国有企业",
+            }
+        }
+
+
+class UniverseStockListResponse(BaseModel):
+    """Universe stock list response."""
+
+    universe: str = Field(..., description="股票池标识")
+    source: str = Field(..., description="股票池来源：tushare、fallback_file 或 none")
+    total_symbols: int = Field(..., description="股票池总数量")
+    items: List[UniverseStockItem] = Field(default_factory=list, description="股票列表")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "universe": "a_share",
+                "source": "tushare",
+                "total_symbols": 5310,
+                "items": [
+                    {
+                        "stock_code": "600519",
+                        "stock_name": "贵州茅台",
+                    }
+                ],
             }
         }
 

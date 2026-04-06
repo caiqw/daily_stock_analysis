@@ -116,6 +116,9 @@ daily_stock_analysis/
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
 | `STOCK_LIST` | 自选股代码，如 `600519,300750,002594` | ✅ |
+| `A_SHARE_UNIVERSE_FALLBACK_ENABLED` | Web 全A手动触发时，Tushare 拉取失败后是否允许回退本地股票池文件 | 可选（默认 `true`） |
+| `A_SHARE_UNIVERSE_FALLBACK_FILE` | 全A回退股票池文件路径（支持相对项目根目录，如 `./data/stock_list_a.csv`） | 可选 |
+| `ANALYSIS_UNIVERSE_CHUNK_SIZE` | Web 全A手动触发时，后端按批入队大小（1-100，默认 50） | 可选 |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 搜索 API（新闻搜索） | 推荐 |
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimaxi.com/) Coding Plan Web Search（结构化搜索结果） | 可选 |
 | `BOCHA_API_KEYS` | [博查搜索](https://open.bocha.cn/) Web Search API（中文搜索优化，支持AI摘要，多个key用逗号分隔） | 可选 |
@@ -154,6 +157,13 @@ daily_stock_analysis/
 ### 5. 完成！
 
 默认每个工作日 **18:00（北京时间）** 自动执行。
+
+### Web 手动触发全A
+
+- 首页顶部新增「全A分析」按钮（Web 手动触发）。
+- 点击确认后，前端会调用 `POST /api/v1/analysis/analyze-universe`。
+- 后端按「Tushare 优先，本地文件回退」加载全A股票池，并按 `ANALYSIS_UNIVERSE_CHUNK_SIZE` 分批提交异步任务。
+- 历史列表默认按综合分（`sentiment_score`）降序展示，并追加技术信号分（`signal_score`）显示。
 
 ---
 
@@ -290,7 +300,10 @@ daily_stock_analysis/
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
 | `STOCK_LIST` | 自选股代码（逗号分隔） | - |
-| `ADMIN_AUTH_ENABLED` | Web 登录：设为 `true` 启用密码保护；首次访问在网页设置初始密码，可在「系统设置 > 修改密码」修改；忘记密码执行 `python -m src.auth reset_password` | `false` |
+| `A_SHARE_UNIVERSE_FALLBACK_ENABLED` | 全A手动触发时，是否启用本地文件回退 | `true` |
+| `A_SHARE_UNIVERSE_FALLBACK_FILE` | 全A回退股票池文件路径 | `./data/stock_list_a.csv` |
+| `ANALYSIS_UNIVERSE_CHUNK_SIZE` | 全A任务分批大小（1-100） | `50` |
+| `ADMIN_AUTH_ENABLED` | Web 登录：设为 `true` 启用密码保护；首次访问在网页设置初始超级管理员密码，可在「系统设置 > 修改密码」修改；忘记超级管理员密码执行 `python -m src.auth reset_password` | `false` |
 | `TRUST_X_FORWARDED_FOR` | 单层可信反向代理部署时设为 `true`，取 `X-Forwarded-For` 最右值作为真实客户端 IP（用于登录限流等）；直连公网时保持 `false` 防伪造。多级代理/CDN 场景下限流 key 可能退化为边缘代理 IP，需额外评估 | `false` |
 | `MAX_WORKERS` | 并发线程数 | `3` |
 | `MARKET_REVIEW_ENABLED` | 启用大盘复盘 | `true` |
@@ -299,6 +312,8 @@ daily_stock_analysis/
 | `SCHEDULE_ENABLED` | 启用定时任务 | `false` |
 | `SCHEDULE_TIME` | 定时执行时间 | `18:00` |
 | `LOG_DIR` | 日志目录 | `./logs` |
+
+> 权限分级补充：普通用户密码请在服务器端执行 `python -m src.auth reset_viewer_password` 初始化或重置（不会写入明文 `.env`）。
 
 ---
 

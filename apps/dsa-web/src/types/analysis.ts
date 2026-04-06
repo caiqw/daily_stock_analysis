@@ -17,6 +17,42 @@ export interface AnalysisRequest {
   notify?: boolean;
 }
 
+export interface AnalyzeUniverseRequest {
+  universe?: 'a_share';
+  notify?: boolean;
+  chunkSize?: number;
+}
+
+export interface AnalyzeUniverseResponse {
+  universe: string;
+  source: 'tushare' | 'fallback_file' | 'none';
+  totalSymbols: number;
+  chunkSize: number;
+  chunkCount: number;
+  submittedTasks: number;
+  duplicateTasks: number;
+  sampleTaskIds: string[];
+  message: string;
+}
+
+export interface UniverseStockItem {
+  stockCode: string;
+  stockName?: string;
+  area?: string;
+  industry?: string;
+  market?: string;
+  listDate?: string;
+  actName?: string;
+  actEntType?: string;
+}
+
+export interface UniverseStockListResponse {
+  universe: 'a_share';
+  source: 'tushare' | 'fallback_file' | 'none';
+  totalSymbols: number;
+  items: UniverseStockItem[];
+}
+
 // ============ Report Types ============
 
 export type ReportLanguage = 'zh' | 'en';
@@ -33,6 +69,15 @@ export interface ReportMeta {
   currentPrice?: number;
   changePct?: number;
   modelUsed?: string;  // LLM model used for analysis
+  area?: string;
+  industry?: string;
+  market?: string;
+  listDate?: string;
+  symbol?: string;
+  tsCode?: string;
+  cnspell?: string;
+  actName?: string;
+  actEntType?: string;
 }
 
 /** Sentiment label */
@@ -196,7 +241,9 @@ export interface HistoryItem {
   stockName?: string;
   reportType?: string;
   sentimentScore?: number;
+  signalScore?: number;
   operationAdvice?: string;
+  trendPrediction?: string;
   createdAt: string;
 }
 
@@ -219,6 +266,88 @@ export interface NewsIntelItem {
 export interface NewsIntelResponse {
   total: number;
   items: NewsIntelItem[];
+}
+
+export interface StockQuote {
+  stockCode: string;
+  stockName?: string;
+  currentPrice: number;
+  change?: number;
+  changePercent?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  prevClose?: number;
+  volume?: number;
+  amount?: number;
+  updateTime?: string;
+  peRatio?: number;
+  pbRatio?: number;
+  totalMv?: number;
+  circMv?: number;
+}
+
+export interface StockCompanyProfile {
+  stockCode: string;
+  stockName?: string;
+  companyName?: string;
+  companyIntro?: string;
+  mainBusiness?: string;
+  businessScope?: string;
+  industry?: string;
+  area?: string;
+  market?: string;
+  listDate?: string;
+  actName?: string;
+  actEntType?: string;
+  sourceChain?: string[];
+}
+
+export interface StockFinancialMetrics {
+  stockCode: string;
+  asOf?: string;
+  peRatio?: number;
+  pbRatio?: number;
+  psRatio?: number;
+  pegRatio?: number;
+  dividendYield?: number;
+  totalMv?: number;
+  circMv?: number;
+  roe?: number;
+  roa?: number;
+  grossMargin?: number;
+  netMargin?: number;
+  debtRatio?: number;
+  revenue?: number;
+  netProfitParent?: number;
+  operatingCashFlow?: number;
+  revenueYoy?: number;
+  netProfitYoy?: number;
+  sourceChain?: string[];
+}
+
+export interface StockCompanyInsightsResponse {
+  stockCode: string;
+  profile: StockCompanyProfile;
+  financialMetrics: StockFinancialMetrics;
+}
+
+export interface KLineData {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+  amount?: number;
+  changePercent?: number;
+}
+
+export interface StockHistoryResponse {
+  stockCode: string;
+  stockName?: string;
+  period: 'daily' | 'weekly' | 'monthly';
+  data: KLineData[];
 }
 
 /** History filter parameters */

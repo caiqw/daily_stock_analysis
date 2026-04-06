@@ -8,7 +8,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from api.deps import get_system_config_service
+from api.deps import get_system_config_service, require_super_admin
 from api.v1.schemas.common import ErrorResponse
 from api.v1.schemas.system_config import (
     ExportSystemConfigResponse,
@@ -61,6 +61,7 @@ def _ensure_desktop_mode() -> None:
 )
 def get_system_config(
     include_schema: bool = Query(True, description="Whether to include schema metadata"),
+    _role: str = Depends(require_super_admin),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> SystemConfigResponse:
     """Load and return current system configuration."""
@@ -92,6 +93,7 @@ def get_system_config(
 )
 def update_system_config(
     request: UpdateSystemConfigRequest,
+    _role: str = Depends(require_super_admin),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> UpdateSystemConfigResponse:
     """Validate and persist system configuration updates."""
@@ -145,6 +147,7 @@ def update_system_config(
     description="Desktop-only endpoint that returns the raw saved .env content.",
 )
 def export_desktop_system_config(
+    _role: str = Depends(require_super_admin),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> ExportSystemConfigResponse:
     """Export the active `.env` file for desktop backup."""
@@ -191,6 +194,7 @@ def export_desktop_system_config(
 )
 def import_desktop_system_config(
     request: ImportSystemConfigRequest,
+    _role: str = Depends(require_super_admin),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> UpdateSystemConfigResponse:
     """Import a desktop `.env` backup into the active config."""
@@ -251,6 +255,7 @@ def import_desktop_system_config(
 )
 def validate_system_config(
     request: ValidateSystemConfigRequest,
+    _role: str = Depends(require_super_admin),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> ValidateSystemConfigResponse:
     """Run pre-save validation only."""
@@ -280,6 +285,7 @@ def validate_system_config(
 )
 def test_llm_channel(
     request: TestLLMChannelRequest,
+    _role: str = Depends(require_super_admin),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> TestLLMChannelResponse:
     """Validate and test one channel definition without writing `.env`."""
@@ -324,6 +330,7 @@ def test_llm_channel(
     description="Return categorized field metadata used for dynamic settings form rendering.",
 )
 def get_system_config_schema(
+    _role: str = Depends(require_super_admin),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> SystemConfigSchemaResponse:
     """Return schema metadata for system configuration fields."""

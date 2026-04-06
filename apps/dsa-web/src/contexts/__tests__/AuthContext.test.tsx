@@ -57,12 +57,14 @@ describe('AuthContext', () => {
         loggedIn: false,
         passwordSet: false,
         passwordChangeable: true,
+        setupState: 'enabled',
       })
       .mockResolvedValueOnce({
         authEnabled: true,
         loggedIn: true,
         passwordSet: true,
         passwordChangeable: true,
+        setupState: 'enabled',
       });
     login.mockResolvedValue(undefined);
 
@@ -86,6 +88,7 @@ describe('AuthContext', () => {
         loggedIn: true,
         passwordSet: true,
         passwordChangeable: true,
+        setupState: 'enabled',
       })
       .mockResolvedValueOnce({
         authEnabled: true,
