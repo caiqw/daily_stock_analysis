@@ -21,9 +21,10 @@ import csv
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import Optional, Union, Dict, Any, List, Tuple
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
@@ -76,6 +77,20 @@ from src.storage import DatabaseManager
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_BATCH_ID_LOCK = Lock()
+_LAST_BATCH_TS: Optional[datetime] = None
+
+
+def _generate_batch_id() -> str:
+    """Generate yyyyMMddHHmmss batch id with same-second collision guard."""
+    global _LAST_BATCH_TS
+    with _BATCH_ID_LOCK:
+        current_ts = datetime.now().replace(microsecond=0)
+        if _LAST_BATCH_TS is not None and current_ts <= _LAST_BATCH_TS:
+            current_ts = _LAST_BATCH_TS + timedelta(seconds=1)
+        _LAST_BATCH_TS = current_ts
+        return current_ts.strftime("%Y%m%d%H%M%S")
 
 _SUPPORTED_FREE_TEXT_RE = re.compile(r"^[A-Za-z0-9.*\-+\u3400-\u9fff\s]+$")
 _DEFAULT_UNIVERSE_CHUNK_SIZE = 50
@@ -579,6 +594,7 @@ def trigger_universe_analysis(
         )
 
     task_queue = get_task_queue()
+    batch_id = _generate_batch_id()
     accepted_total = 0
     duplicate_total = 0
     sample_task_ids: List[str] = []
@@ -590,6 +606,7 @@ def trigger_universe_analysis(
             stock_name=None,
             original_query=f"universe:{request.universe}",
             selection_source="import",
+            batch_id=batch_id,
             report_type="detailed",
             force_refresh=False,
             notify=request.notify,
@@ -609,6 +626,7 @@ def trigger_universe_analysis(
         chunk_count=chunk_count,
         submitted_tasks=accepted_total,
         duplicate_tasks=duplicate_total,
+        batch_id=batch_id,
         sample_task_ids=sample_task_ids,
         message=(
             f"已提交全A分析任务：总计 {len(stock_codes)} 只，"
@@ -687,6 +705,7 @@ def _handle_async_analysis_batch(
     Handle asynchronous analysis requests, including batch submission.
     """
     task_queue = get_task_queue()
+    batch_id = _generate_batch_id()
     
     # Preserve metadata for single-stock requests. For batch requests,
     # only carry through metadata that semantically applies to the whole
@@ -704,6 +723,7 @@ def _handle_async_analysis_batch(
         stock_name=stock_name,
         original_query=original_query,
         selection_source=selection_source,
+        batch_id=batch_id,
         report_type=request.report_type,
         force_refresh=request.force_refresh,
         notify=notify,
@@ -749,6 +769,7 @@ def _handle_async_analysis_batch(
             task_id=accepted[0].task_id,
             status="pending",
             message=accepted[0].message,
+            batch_id=batch_id,
         )
         return JSONResponse(
             status_code=202,
@@ -759,6 +780,7 @@ def _handle_async_analysis_batch(
     batch_response = BatchTaskAcceptedResponse(
         accepted=accepted,
         duplicates=duplicates,
+        batch_id=batch_id,
         message=f"已提交 {len(accepted)} 个任务，{len(duplicates)} 个重复跳过",
     )
     return JSONResponse(
@@ -854,6 +876,7 @@ def get_task_list(
         None,
         description="筛选状态：pending, processing, completed, failed（支持逗号分隔多个）"
     ),
+    batch_id: Optional[str] = Query(None, description="按批次号筛选（yyyyMMddHHmmss）"),
     limit: int = Query(20, description="返回数量限制", ge=1, le=100),
 ) -> TaskListResponse:
     """
@@ -875,6 +898,8 @@ def get_task_list(
     if status:
         status_list = [s.strip().lower() for s in status.split(",")]
         all_tasks = [t for t in all_tasks if t.status.value in status_list]
+    if batch_id:
+        all_tasks = [t for t in all_tasks if (t.batch_id or "") == batch_id]
     
     # 统计信息
     stats = task_queue.get_task_stats()
@@ -895,6 +920,7 @@ def get_task_list(
             error=t.error,
             original_query=t.original_query,
             selection_source=t.selection_source,
+            batch_id=t.batch_id,
         )
         for t in all_tasks
     ]
@@ -1034,6 +1060,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
             stock_name=task.stock_name,
             original_query=task.original_query,
             selection_source=task.selection_source,
+            batch_id=task.batch_id,
         )
     
     # 2. 从数据库查询已完成的记录
@@ -1088,7 +1115,8 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     report=report_dict,
                     created_at=record.created_at.isoformat() if record.created_at else datetime.now().isoformat()
                 ),
-                error=None
+                error=None,
+                batch_id=getattr(record, "batch_id", None),
             )
 
     except Exception as e:

@@ -31,6 +31,7 @@ export interface AnalyzeUniverseResponse {
   chunkCount: number;
   submittedTasks: number;
   duplicateTasks: number;
+  batchId?: string;
   sampleTaskIds: string[];
   message: string;
 }
@@ -162,6 +163,7 @@ export interface TaskAccepted {
   taskId: string;
   status: 'pending' | 'processing';
   message?: string;
+  batchId?: string;
 }
 
 export interface BatchTaskAcceptedItem {
@@ -180,6 +182,7 @@ export interface BatchDuplicateTaskItem {
 export interface BatchTaskAcceptedResponse {
   accepted: BatchTaskAcceptedItem[];
   duplicates: BatchDuplicateTaskItem[];
+  batchId?: string;
   message: string;
 }
 
@@ -197,6 +200,7 @@ export interface TaskStatus {
   stockName?: string;
   originalQuery?: string;
   selectionSource?: string;
+  batchId?: string;
 }
 
 /** Task details used by task list and SSE events */
@@ -214,6 +218,7 @@ export interface TaskInfo {
   error?: string;
   originalQuery?: string;
   selectionSource?: string;
+  batchId?: string;
 }
 
 /** Task list response */
@@ -238,6 +243,7 @@ export interface DuplicateTaskError {
 export interface HistoryItem {
   id: number;  // Record primary key ID, always present for persisted history items
   queryId: string;  // Linked analysis query ID
+  batchId?: string;
   stockCode: string;
   stockName?: string;
   reportType?: string;
@@ -354,6 +360,7 @@ export interface StockHistoryResponse {
 /** History filter parameters */
 export interface HistoryFilters {
   stockCode?: string;
+  batchId?: string;
   startDate?: string;
   endDate?: string;
 }

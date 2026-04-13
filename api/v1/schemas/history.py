@@ -19,6 +19,7 @@ class HistoryItem(BaseModel):
 
     id: Optional[int] = Field(None, description="分析历史记录主键 ID")
     query_id: str = Field(..., description="分析记录关联 query_id（批量分析时重复）")
+    batch_id: Optional[str] = Field(None, description="批次号（yyyyMMddHHmmss）")
     stock_code: str = Field(..., description="股票代码")
     stock_name: Optional[str] = Field(None, description="股票名称")
     report_type: Optional[str] = Field(None, description="报告类型")
@@ -42,6 +43,7 @@ class HistoryItem(BaseModel):
             "example": {
                 "id": 1234,
                 "query_id": "abc123",
+                "batch_id": "20260413123456",
                 "stock_code": "600519",
                 "stock_name": "贵州茅台",
                 "report_type": "detailed",

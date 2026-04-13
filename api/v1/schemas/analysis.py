@@ -152,13 +152,15 @@ class TaskAccepted(BaseModel):
         pattern="^(pending|processing)$"
     )
     message: Optional[str] = Field(None, description="提示信息")
+    batch_id: Optional[str] = Field(None, description="批次号（yyyyMMddHHmmss）")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "task_id": "task_abc123",
                 "status": "pending",
-                "message": "Analysis task accepted"
+                "message": "Analysis task accepted",
+                "batch_id": "20260413123456"
             }
         }
 
@@ -208,6 +210,7 @@ class BatchTaskAcceptedResponse(BaseModel):
 
     accepted: List[BatchTaskAcceptedItem] = Field(default_factory=list, description="成功提交的任务列表")
     duplicates: List[BatchDuplicateTaskItem] = Field(default_factory=list, description="重复而跳过的任务列表")
+    batch_id: Optional[str] = Field(None, description="批次号（yyyyMMddHHmmss）")
     message: str = Field(..., description="汇总信息")
 
     class Config:
@@ -228,6 +231,7 @@ class BatchTaskAcceptedResponse(BaseModel):
                         "message": "股票 000858 正在分析中 (task_id: task_existing_456)"
                     }
                 ],
+                "batch_id": "20260413123456",
                 "message": "已提交 1 个任务，1 个重复跳过"
             }
         }
@@ -243,6 +247,7 @@ class AnalyzeUniverseAcceptedResponse(BaseModel):
     chunk_count: int = Field(..., description="分批数量")
     submitted_tasks: int = Field(..., description="本次成功提交任务数量")
     duplicate_tasks: int = Field(..., description="重复跳过任务数量")
+    batch_id: Optional[str] = Field(None, description="批次号（yyyyMMddHHmmss）")
     sample_task_ids: List[str] = Field(default_factory=list, description="示例任务 ID（最多前 10 个）")
     message: str = Field(..., description="汇总信息")
 
@@ -256,6 +261,7 @@ class AnalyzeUniverseAcceptedResponse(BaseModel):
                 "chunk_count": 107,
                 "submitted_tasks": 5288,
                 "duplicate_tasks": 22,
+                "batch_id": "20260413123456",
                 "sample_task_ids": ["task_xxx1", "task_xxx2"],
                 "message": "已提交全A分析任务：总计 5310 只，成功 5288，重复跳过 22",
             }
@@ -351,6 +357,7 @@ class TaskStatus(BaseModel):
         description="选择来源",
         pattern=SELECTION_SOURCE_PATTERN,
     )
+    batch_id: Optional[str] = Field(None, description="批次号（yyyyMMddHHmmss）")
     
     class Config:
         json_schema_extra = {
@@ -362,7 +369,8 @@ class TaskStatus(BaseModel):
                 "error": None,
                 "stock_name": "贵州茅台",
                 "original_query": "茅台",
-                "selection_source": "autocomplete"
+                "selection_source": "autocomplete",
+                "batch_id": "20260413123456"
             }
         }
 
@@ -391,6 +399,7 @@ class TaskInfo(BaseModel):
         description="选择来源",
         pattern=SELECTION_SOURCE_PATTERN,
     )
+    batch_id: Optional[str] = Field(None, description="批次号（yyyyMMddHHmmss）")
     
     class Config:
         json_schema_extra = {
@@ -407,7 +416,8 @@ class TaskInfo(BaseModel):
                 "completed_at": None,
                 "error": None,
                 "original_query": "茅台",
-                "selection_source": "autocomplete"
+                "selection_source": "autocomplete",
+                "batch_id": "20260413123456"
             }
         }
 

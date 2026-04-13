@@ -158,6 +158,7 @@ def _resolve_stock_basic_info(stock_code: str) -> dict[str, str]:
 )
 def get_history_list(
     stock_code: Optional[str] = Query(None, description="股票代码筛选"),
+    batch_id: Optional[str] = Query(None, description="批次号筛选（yyyyMMddHHmmss）"),
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
     page: int = Query(1, ge=1, description="页码（从 1 开始）"),
@@ -186,6 +187,7 @@ def get_history_list(
         # 使用 def 而非 async def，FastAPI 自动在线程池中执行
         result = service.get_history_list(
             stock_code=stock_code,
+            batch_id=batch_id,
             start_date=start_date,
             end_date=end_date,
             page=page,
@@ -197,6 +199,7 @@ def get_history_list(
             HistoryItem(
                 id=item.get("id"),
                 query_id=item.get("query_id", ""),
+                batch_id=item.get("batch_id"),
                 stock_code=item.get("stock_code", ""),
                 stock_name=item.get("stock_name"),
                 report_type=item.get("report_type"),

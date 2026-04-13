@@ -217,6 +217,7 @@ class AnalysisHistory(Base):
 
     # 关联查询链路
     query_id = Column(String(64), index=True)
+    batch_id = Column(String(14), index=True)
 
     # 股票信息
     code = Column(String(10), nullable=False, index=True)
@@ -245,6 +246,7 @@ class AnalysisHistory(Base):
 
     __table_args__ = (
         Index('ix_analysis_code_time', 'code', 'created_at'),
+        Index('ix_analysis_batch_time', 'batch_id', 'created_at'),
     )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -252,6 +254,7 @@ class AnalysisHistory(Base):
         return {
             'id': self.id,
             'query_id': self.query_id,
+            'batch_id': self.batch_id,
             'code': self.code,
             'name': self.name,
             'report_type': self.report_type,
@@ -697,6 +700,16 @@ class DatabaseManager:
                 if "signal_score" not in existing:
                     conn.exec_driver_sql("ALTER TABLE analysis_history ADD COLUMN signal_score INTEGER")
                     logger.info("数据库兼容升级：analysis_history.signal_score 已添加")
+                if "batch_id" not in existing:
+                    conn.exec_driver_sql("ALTER TABLE analysis_history ADD COLUMN batch_id VARCHAR(14)")
+                    logger.info("数据库兼容升级：analysis_history.batch_id 已添加")
+                index_rows = conn.exec_driver_sql("PRAGMA index_list('analysis_history')").fetchall()
+                index_names = {row[1] for row in index_rows}
+                if "ix_analysis_batch_time" not in index_names:
+                    conn.exec_driver_sql(
+                        "CREATE INDEX ix_analysis_batch_time ON analysis_history (batch_id, created_at)"
+                    )
+                    logger.info("数据库兼容升级：ix_analysis_batch_time 已添加")
         except Exception as exc:
             logger.warning("数据库兼容升级检查失败（继续运行）: %s", exc)
     
@@ -1084,6 +1097,7 @@ class DatabaseManager:
         query_id: str,
         report_type: str,
         news_content: Optional[str],
+        batch_id: Optional[str] = None,
         context_snapshot: Optional[Dict[str, Any]] = None,
         save_snapshot: bool = True
     ) -> int:
@@ -1101,6 +1115,7 @@ class DatabaseManager:
 
         record = AnalysisHistory(
             query_id=query_id,
+            batch_id=batch_id,
             code=result.code,
             name=result.name,
             report_type=report_type,
@@ -1133,6 +1148,7 @@ class DatabaseManager:
         self,
         code: Optional[str] = None,
         query_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
         days: int = 30,
         limit: int = 50,
         exclude_query_id: Optional[str] = None,
@@ -1157,6 +1173,8 @@ class DatabaseManager:
 
             if code:
                 conditions.append(AnalysisHistory.code == code)
+            if batch_id:
+                conditions.append(AnalysisHistory.batch_id == batch_id)
 
             # exclude_query_id only applies when not doing exact lookup (query_id is None)
             if exclude_query_id and not query_id:
@@ -1174,6 +1192,7 @@ class DatabaseManager:
     def get_analysis_history_paginated(
         self,
         code: Optional[str] = None,
+        batch_id: Optional[str] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         offset: int = 0,
@@ -1199,6 +1218,8 @@ class DatabaseManager:
             
             if code:
                 conditions.append(AnalysisHistory.code == code)
+            if batch_id:
+                conditions.append(AnalysisHistory.batch_id == batch_id)
             if start_date:
                 # created_at >= start_date 00:00:00
                 conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))

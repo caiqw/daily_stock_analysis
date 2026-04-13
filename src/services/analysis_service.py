@@ -43,6 +43,7 @@ class AnalysisService:
         report_type: str = "detailed",
         force_refresh: bool = False,
         query_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
         send_notification: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
@@ -78,7 +79,8 @@ class AnalysisService:
             pipeline = StockAnalysisPipeline(
                 config=config,
                 query_id=query_id,
-                query_source="api"
+                query_source="api",
+                batch_id=batch_id,
             )
             
             # 确定报告类型 (API: simple/detailed/full/brief -> ReportType)

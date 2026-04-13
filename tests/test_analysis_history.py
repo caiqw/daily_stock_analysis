@@ -709,6 +709,33 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(items[2]["signal_score"], 76)
         self.assertGreater(items[0]["sentiment_score"], items[1]["sentiment_score"])
 
+    def test_history_list_supports_batch_id_filter(self) -> None:
+        result = self._build_result()
+        self.db.save_analysis_history(
+            result=result,
+            query_id="query_batch_001",
+            batch_id="20260413120000",
+            report_type="simple",
+            news_content="新闻摘要",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.db.save_analysis_history(
+            result=result,
+            query_id="query_batch_002",
+            batch_id="20260413120100",
+            report_type="simple",
+            news_content="新闻摘要",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+
+        response = HistoryService(self.db).get_history_list(batch_id="20260413120000", page=1, limit=20)
+        self.assertEqual(response["total"], 1)
+        self.assertEqual(len(response["items"]), 1)
+        self.assertEqual(response["items"][0]["query_id"], "query_batch_001")
+        self.assertEqual(response["items"][0]["batch_id"], "20260413120000")
+
     @patch("src.services.history_service.requests.get")
     def test_resolve_and_get_news_uses_rss_fallback_when_db_news_empty(self, mock_get) -> None:
         service = HistoryService(self.db)

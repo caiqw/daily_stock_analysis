@@ -570,6 +570,11 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertIn("MAX_WORKERS=1", joined)
         self.assertIn("reload_now=false", joined)
 
+    def test_validate_accepts_max_workers_50(self) -> None:
+        validation = self.service.validate(items=[{"key": "MAX_WORKERS", "value": "50"}])
+        self.assertTrue(validation["valid"])
+        self.assertEqual(validation["issues"], [])
+
 
     def test_validate_rejects_comma_only_api_key(self) -> None:
         """Whitespace/comma-only api_key must fail validation (P2: parsed-segment check)."""

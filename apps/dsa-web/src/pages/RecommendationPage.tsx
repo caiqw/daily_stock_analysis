@@ -15,7 +15,7 @@ import { normalizeReportLanguage } from '../utils/reportLanguage';
 const UNIVERSE_PAGE_SIZE = 100;
 
 type ResultFilter = 'all' | 'pending' | 'processing' | 'completed' | 'failed';
-type ResultScopeFilter = 'all' | 'submitted';
+type ResultScopeFilter = 'all' | 'batch';
 type ViewMode = 'list' | 'industry';
 type SectionMode = 'pool' | 'results';
 type TaskInfoStatus = 'pending' | 'processing' | 'completed' | 'failed';
@@ -52,13 +52,24 @@ const normalizeStockCodeKey = (code?: string) => {
   return normalized;
 };
 
+const pseudoRandomScore = (text: string, seed: number) => {
+  let hash = 2166136261 ^ seed;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
 const RecommendationPage: React.FC = () => {
   const { capabilities } = useAuth();
   const recommendationReadonly = !capabilities.canAnalyzeRecommendation;
   const [sectionMode, setSectionMode] = useState<SectionMode>('pool');
   const [universeKeyword, setUniverseKeyword] = useState('');
-  const [universeSortBy, setUniverseSortBy] = useState<'signal' | 'sentiment'>('signal');
+  const [universeSortBy, setUniverseSortBy] = useState<'signal' | 'sentiment' | 'random'>('signal');
+  const [randomSortSeed, setRandomSortSeed] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [poolBatchScope, setPoolBatchScope] = useState<'all' | 'batch'>('all');
   const [universePage, setUniversePage] = useState(1);
   const [universeIndustryFilters, setUniverseIndustryFilters] = useState<string[]>([]);
   const [universeAreaFilter, setUniverseAreaFilter] = useState('');
@@ -67,7 +78,6 @@ const RecommendationPage: React.FC = () => {
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
   const [resultScopeFilter, setResultScopeFilter] = useState<ResultScopeFilter>('all');
   const [resultKeyword, setResultKeyword] = useState('');
-  const [submittedStockCodes, setSubmittedStockCodes] = useState<Set<string>>(new Set());
   const [hasNewCompleted, setHasNewCompleted] = useState(false);
   const [isPoolPreviewOpen, setIsPoolPreviewOpen] = useState(false);
   const [isPoolPreviewLoading, setIsPoolPreviewLoading] = useState(false);
@@ -103,12 +113,13 @@ const RecommendationPage: React.FC = () => {
     clearUniverseStockSelection,
     submitSelectedUniverseAnalysis,
     clearError,
-    loadInitialHistory,
     refreshHistory,
     loadMoreHistory,
     loadAllHistory,
     historyWindowDays,
+    currentBatchId,
     setHistoryWindowDays,
+    setCurrentBatchId,
     selectHistoryItem,
     syncTaskCreated,
     syncTaskUpdated,
@@ -146,12 +157,13 @@ const RecommendationPage: React.FC = () => {
       clearUniverseStockSelection: state.clearUniverseStockSelection,
       submitSelectedUniverseAnalysis: state.submitSelectedUniverseAnalysis,
       clearError: state.clearError,
-      loadInitialHistory: state.loadInitialHistory,
       refreshHistory: state.refreshHistory,
       loadMoreHistory: state.loadMoreHistory,
       loadAllHistory: state.loadAllHistory,
       historyWindowDays: state.historyWindowDays,
+      currentBatchId: state.currentBatchId,
       setHistoryWindowDays: state.setHistoryWindowDays,
+      setCurrentBatchId: state.setCurrentBatchId,
       selectHistoryItem: state.selectHistoryItem,
       syncTaskCreated: state.syncTaskCreated,
       syncTaskUpdated: state.syncTaskUpdated,
@@ -163,8 +175,13 @@ const RecommendationPage: React.FC = () => {
     })),
   );
 
+  const loadInitialHistoryForRecommendation = useCallback(async () => {
+    // Keep recommendation page list-first on initial render.
+    await refreshHistory();
+  }, [refreshHistory]);
+
   useDashboardLifecycle({
-    loadInitialHistory,
+    loadInitialHistory: loadInitialHistoryForRecommendation,
     refreshHistory,
     syncTaskCreated,
     syncTaskUpdated,
@@ -191,6 +208,22 @@ const RecommendationPage: React.FC = () => {
 
   const analyzedStockCodeSet = useMemo(() => {
     const set = new Set<string>();
+    const batchFilterEnabled = poolBatchScope === 'batch' && Boolean(currentBatchId);
+
+    if (batchFilterEnabled) {
+      for (const item of historyItems) {
+        if (item.batchId !== currentBatchId || !item.stockCode) continue;
+        const key = normalizeStockCodeKey(item.stockCode);
+        if (key) set.add(key);
+      }
+      for (const task of activeTasks) {
+        if (task.batchId !== currentBatchId || !task.stockCode) continue;
+        const key = normalizeStockCodeKey(task.stockCode);
+        if (key) set.add(key);
+      }
+      return set;
+    }
+
     for (const item of universeStocks) {
       if (item.hasAnalyzed) {
         const key = normalizeStockCodeKey(item.stockCode);
@@ -204,15 +237,18 @@ const RecommendationPage: React.FC = () => {
       }
     }
     return set;
-  }, [historyItems, universeStocks]);
+  }, [activeTasks, currentBatchId, historyItems, poolBatchScope, universeStocks]);
 
   const visibleUniverseStocks = useMemo(() => {
     const q = universeKeyword.trim().toLowerCase();
+    const batchFilterEnabled = poolBatchScope === 'batch' && Boolean(currentBatchId);
     return universeStocks.filter((item) => {
+      const stockKey = normalizeStockCodeKey(item.stockCode);
       const industryMatch = universeIndustryFilters.length === 0 || universeIndustryFilters.includes(item.industry || '');
       const areaMatch = !universeAreaFilter || (item.area || '') === universeAreaFilter;
-      const analyzedMatch = poolQuickFilter === 'all' || analyzedStockCodeSet.has(normalizeStockCodeKey(item.stockCode));
-      if (!industryMatch || !areaMatch || !analyzedMatch) {
+      const inSelectedBatch = !batchFilterEnabled || analyzedStockCodeSet.has(stockKey);
+      const analyzedMatch = poolQuickFilter === 'all' || analyzedStockCodeSet.has(stockKey);
+      if (!industryMatch || !areaMatch || !inSelectedBatch || !analyzedMatch) {
         return false;
       }
       if (!q) {
@@ -222,7 +258,16 @@ const RecommendationPage: React.FC = () => {
         .map((value) => value.toLowerCase());
       return fields.some((value) => value.includes(q));
     });
-  }, [analyzedStockCodeSet, poolQuickFilter, universeKeyword, universeStocks, universeIndustryFilters, universeAreaFilter]);
+  }, [
+    analyzedStockCodeSet,
+    currentBatchId,
+    poolBatchScope,
+    poolQuickFilter,
+    universeKeyword,
+    universeStocks,
+    universeIndustryFilters,
+    universeAreaFilter,
+  ]);
 
   const selectedUniverseSet = useMemo(() => new Set(selectedUniverseStockCodes), [selectedUniverseStockCodes]);
   const visibleUniverseCodes = useMemo(() => visibleUniverseStocks.map((item) => item.stockCode), [visibleUniverseStocks]);
@@ -275,6 +320,11 @@ const RecommendationPage: React.FC = () => {
   const sortedUniverseStocks = useMemo(() => {
     const items = [...visibleUniverseStocks];
     items.sort((a, b) => {
+      if (universeSortBy === 'random') {
+        const randomA = pseudoRandomScore(a.stockCode, randomSortSeed);
+        const randomB = pseudoRandomScore(b.stockCode, randomSortSeed);
+        if (randomA !== randomB) return randomA - randomB;
+      }
       const scoreA = universeScoreMap.get(normalizeStockCodeKey(a.stockCode));
       const scoreB = universeScoreMap.get(normalizeStockCodeKey(b.stockCode));
       const signalA = scoreA?.signalScore ?? -1;
@@ -291,7 +341,7 @@ const RecommendationPage: React.FC = () => {
       return a.stockCode.localeCompare(b.stockCode);
     });
     return items;
-  }, [visibleUniverseStocks, universeScoreMap, universeSortBy]);
+  }, [randomSortSeed, visibleUniverseStocks, universeScoreMap, universeSortBy]);
 
   const pagedUniverseStocks = useMemo(() => {
     const start = (universePage - 1) * UNIVERSE_PAGE_SIZE;
@@ -322,19 +372,30 @@ const RecommendationPage: React.FC = () => {
     [sortedUniverseStocks.length],
   );
 
+  const visibleActiveTasks = useMemo(() => {
+    if (resultScopeFilter !== 'batch' || !currentBatchId) {
+      return activeTasks;
+    }
+    return activeTasks.filter((task) => task.batchId === currentBatchId);
+  }, [activeTasks, currentBatchId, resultScopeFilter]);
+
   const activeTaskStatusMap = useMemo(() => {
     const map = new Map<string, TaskInfoStatus>();
-    for (const task of activeTasks) {
+    for (const task of visibleActiveTasks) {
       const taskKey = normalizeStockCodeKey(task.stockCode);
       if (!taskKey) continue;
       map.set(taskKey, task.status as TaskInfoStatus);
     }
     return map;
-  }, [activeTasks]);
+  }, [visibleActiveTasks]);
 
   const latestHistoryByCode = useMemo(() => {
     const map = new Map<string, HistoryItem>();
+    const batchFilterEnabled = poolBatchScope === 'batch' && Boolean(currentBatchId);
     for (const item of historyItems) {
+      if (batchFilterEnabled && item.batchId !== currentBatchId) {
+        continue;
+      }
       const stockKey = normalizeStockCodeKey(item.stockCode);
       if (!stockKey) continue;
       const existed = map.get(stockKey);
@@ -349,12 +410,11 @@ const RecommendationPage: React.FC = () => {
       }
     }
     return map;
-  }, [historyItems]);
+  }, [currentBatchId, historyItems, poolBatchScope]);
 
   const recommendationResults = useMemo(() => {
     const filtered = historyItems.filter((item) => {
-      const itemCodeKey = normalizeStockCodeKey(item.stockCode);
-      if (resultScopeFilter === 'submitted' && !submittedStockCodes.has(itemCodeKey)) {
+      if (resultScopeFilter === 'batch' && currentBatchId && item.batchId !== currentBatchId) {
         return false;
       }
       const taskStatus = activeTaskStatusMap.get(item.stockCode);
@@ -363,12 +423,29 @@ const RecommendationPage: React.FC = () => {
       return status === resultFilter;
     });
     return [...filtered].sort((a, b) => {
-      const aSubmitted = submittedStockCodes.has(normalizeStockCodeKey(a.stockCode)) ? 1 : 0;
-      const bSubmitted = submittedStockCodes.has(normalizeStockCodeKey(b.stockCode)) ? 1 : 0;
-      if (aSubmitted !== bSubmitted) return bSubmitted - aSubmitted;
+      if (resultScopeFilter === 'batch' && currentBatchId) {
+        const aSentiment = a.sentimentScore ?? -1;
+        const bSentiment = b.sentimentScore ?? -1;
+        if (aSentiment !== bSentiment) return bSentiment - aSentiment;
+        const aSignal = a.signalScore ?? -1;
+        const bSignal = b.signalScore ?? -1;
+        if (aSignal !== bSignal) return bSignal - aSignal;
+      }
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
-  }, [activeTaskStatusMap, historyItems, resultFilter, resultScopeFilter, submittedStockCodes]);
+  }, [activeTaskStatusMap, currentBatchId, historyItems, resultFilter, resultScopeFilter]);
+
+  const batchOptions = useMemo(() => {
+    const ids = new Set<string>();
+    for (const task of activeTasks) {
+      if (task.batchId) ids.add(task.batchId);
+    }
+    for (const item of historyItems) {
+      if (item.batchId) ids.add(item.batchId);
+    }
+    if (currentBatchId) ids.add(currentBatchId);
+    return Array.from(ids).sort((a, b) => b.localeCompare(a));
+  }, [activeTasks, currentBatchId, historyItems]);
 
   const visibleRecommendationResults = useMemo(() => {
     const keyword = resultKeyword.trim().toLowerCase();
@@ -423,12 +500,12 @@ const RecommendationPage: React.FC = () => {
     }
     if (
       latest.id !== latestSeenRecordIdRef.current
-      && submittedStockCodes.has(normalizeStockCodeKey(latest.stockCode))
+      && (!currentBatchId || latest.batchId === currentBatchId)
     ) {
       setHasNewCompleted(true);
       latestSeenRecordIdRef.current = latest.id;
     }
-  }, [historyItems, submittedStockCodes]);
+  }, [currentBatchId, historyItems]);
 
   const toggleUniverseIndustryFilter = useCallback((industry: string) => {
     setUniverseIndustryFilters((prev) => {
@@ -455,19 +532,18 @@ const RecommendationPage: React.FC = () => {
     if (recommendationReadonly) {
       return;
     }
-    await submitAnalysis({
+    const batchId = await submitAnalysis({
       stockCode: query,
       originalQuery: `recommendation:${query}`,
       selectionSource: 'manual',
     });
-    const codeKey = normalizeStockCodeKey(query);
-    if (codeKey) {
-      setSubmittedStockCodes((prev) => new Set([...prev, codeKey]));
+    if (batchId) {
+      await setCurrentBatchId(batchId);
       setSectionMode('results');
       setResultFilter('all');
-      setResultScopeFilter('submitted');
+      setResultScopeFilter('batch');
     }
-  }, [query, recommendationReadonly, submitAnalysis]);
+  }, [query, recommendationReadonly, setCurrentBatchId, submitAnalysis]);
 
   const handleSubmitSelected = useCallback(async () => {
     if (recommendationReadonly) {
@@ -475,21 +551,14 @@ const RecommendationPage: React.FC = () => {
     }
     const snapshot = Array.from(new Set(selectedUniverseStockCodes));
     if (snapshot.length === 0) return;
-    await submitSelectedUniverseAnalysis(snapshot);
-    setSubmittedStockCodes((prev) => {
-      const next = new Set(prev);
-      for (const code of snapshot) {
-        const codeKey = normalizeStockCodeKey(code);
-        if (codeKey) {
-          next.add(codeKey);
-        }
-      }
-      return next;
-    });
+    const batchId = await submitSelectedUniverseAnalysis(snapshot);
+    if (batchId) {
+      await setCurrentBatchId(batchId);
+    }
     setSectionMode('results');
     setResultFilter('all');
-    setResultScopeFilter('submitted');
-  }, [recommendationReadonly, selectedUniverseStockCodes, submitSelectedUniverseAnalysis]);
+    setResultScopeFilter('batch');
+  }, [recommendationReadonly, selectedUniverseStockCodes, setCurrentBatchId, submitSelectedUniverseAnalysis]);
 
   const handleSelectResult = useCallback(async (item: HistoryItem) => {
     if (item.id == null) return;
@@ -585,8 +654,8 @@ const RecommendationPage: React.FC = () => {
     sectionMode,
   ]);
 
-  const pendingCount = activeTasks.filter((task) => task.status === 'pending').length;
-  const processingCount = activeTasks.filter((task) => task.status === 'processing').length;
+  const pendingCount = visibleActiveTasks.filter((task) => task.status === 'pending').length;
+  const processingCount = visibleActiveTasks.filter((task) => task.status === 'processing').length;
   const formatAnalysisTime = (value?: string) => {
     if (!value) return '--';
     const ts = new Date(value).getTime();
@@ -655,6 +724,7 @@ const RecommendationPage: React.FC = () => {
   const activeReportLanguage = normalizeReportLanguage(
     selectedReportWithFallback?.meta.reportLanguage || selectedReport?.meta.reportLanguage,
   );
+  const shouldShowReportPanel = isLoadingReport || Boolean(selectedReport);
 
   return (
     <div className="space-y-4 px-3 pb-4 pt-2 md:px-4 md:pt-3">
@@ -775,6 +845,27 @@ const RecommendationPage: React.FC = () => {
                   <option key={item} value={item}>{item}</option>
                 ))}
               </select>
+              <select
+                value={poolBatchScope === 'batch' ? (currentBatchId || '') : ''}
+                onChange={(e) => {
+                  const selectedBatchId = e.target.value || null;
+                  if (selectedBatchId) {
+                    setPoolBatchScope('batch');
+                    void setCurrentBatchId(selectedBatchId);
+                    return;
+                  }
+                  setPoolBatchScope('all');
+                  void setCurrentBatchId(null);
+                }}
+                className="input-surface h-9 min-w-56 rounded-lg border bg-transparent px-2 text-xs"
+              >
+                <option value="">股票池按批次查询（全部）</option>
+                {batchOptions.map((batchId) => (
+                  <option key={batchId} value={batchId}>
+                    {batchId}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-lg border border-subtle bg-base/40 px-2 py-2">
@@ -825,6 +916,16 @@ const RecommendationPage: React.FC = () => {
                   onClick={() => setUniverseSortBy('sentiment')}
                 >
                   情绪分优先
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-md px-2 py-1 ${universeSortBy === 'random' ? 'bg-primary/15 text-foreground' : 'hover:bg-hover'}`}
+                  onClick={() => {
+                    setUniverseSortBy('random');
+                    setRandomSortSeed(Date.now());
+                  }}
+                >
+                  随机排序
                 </button>
               </div>
             </div>
@@ -1196,9 +1297,9 @@ const RecommendationPage: React.FC = () => {
             </div>
           </>
         ) : (
-          <div className="grid min-h-[60vh] grid-cols-1 gap-4 xl:grid-cols-12">
-            <div className="space-y-3 xl:col-span-5">
-              <TaskPanel tasks={activeTasks} />
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+            <div className={`space-y-3 ${shouldShowReportPanel ? 'xl:col-span-5' : 'xl:col-span-12'}`}>
+              <TaskPanel tasks={visibleActiveTasks} />
               <div className="rounded-lg border border-subtle bg-base/40 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs text-secondary-text">
@@ -1265,11 +1366,34 @@ const RecommendationPage: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    className={`rounded-md px-2 py-1 text-xs ${resultScopeFilter === 'submitted' ? 'bg-primary/15 text-foreground' : 'text-secondary-text hover:bg-hover'}`}
-                    onClick={() => setResultScopeFilter('submitted')}
+                    className={`rounded-md px-2 py-1 text-xs ${resultScopeFilter === 'batch' ? 'bg-primary/15 text-foreground' : 'text-secondary-text hover:bg-hover'}`}
+                    onClick={() => setResultScopeFilter('batch')}
                   >
-                    仅本次提交
+                    仅当前批次
                   </button>
+                </div>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <select
+                    value={currentBatchId || ''}
+                    onChange={(e) => {
+                      const selectedBatchId = e.target.value || null;
+                      if (selectedBatchId) {
+                        setResultScopeFilter('batch');
+                        void setCurrentBatchId(selectedBatchId);
+                        return;
+                      }
+                      setResultScopeFilter('all');
+                      void setCurrentBatchId(null);
+                    }}
+                    className="input-surface h-8 min-w-56 flex-1 rounded-md border bg-transparent px-2 text-xs"
+                  >
+                    <option value="">选择批次号（单选）</option>
+                    {batchOptions.map((batchId) => (
+                      <option key={batchId} value={batchId}>
+                        {batchId}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="mb-2">
                   <input
@@ -1337,6 +1461,7 @@ const RecommendationPage: React.FC = () => {
                                     <span className="rec-score-chip rec-score-chip-signal">信号分 <strong>--</strong></span>
                                   )}
                                   <span>分析时间: {formatAnalysisTime(item.createdAt)}</span>
+                                  {item.batchId ? <span>批次: {item.batchId}</span> : null}
                                 </div>
                                 <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-text">
                                   <span className="rec-insight-chip">
@@ -1396,24 +1521,22 @@ const RecommendationPage: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="xl:col-span-7">
-              {isLoadingReport ? (
-                <div className="flex min-h-[56vh] items-center justify-center rounded-lg border border-subtle bg-base/30">
-                  <DashboardStateBlock title="加载报告中..." loading />
-                </div>
-              ) : selectedReport ? (
-                <div className="space-y-4">
-                  <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2 text-xs text-secondary-text">
-                    分析时间：{formatAnalysisTime(selectedReport.meta.createdAt)}
+            {shouldShowReportPanel ? (
+              <div className="hidden xl:block xl:col-span-7">
+                {isLoadingReport ? (
+                  <div className="flex min-h-[56vh] items-center justify-center rounded-lg border border-subtle bg-base/30">
+                    <DashboardStateBlock title="加载报告中..." loading />
                   </div>
-                  <ReportSummary data={selectedReportWithFallback || selectedReport} isHistory />
-                </div>
-              ) : (
-                <div className="flex min-h-[56vh] items-center justify-center rounded-lg border border-subtle bg-base/30 text-sm text-secondary-text">
-                  从左侧选择一条分析结果查看详情。
-                </div>
-              )}
-            </div>
+                ) : selectedReport ? (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-subtle bg-base/40 px-3 py-2 text-xs text-secondary-text">
+                      分析时间：{formatAnalysisTime(selectedReport.meta.createdAt)}
+                    </div>
+                    <ReportSummary data={selectedReportWithFallback || selectedReport} isHistory />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         )}
       </div>

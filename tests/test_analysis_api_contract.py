@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from tests.litellm_stub import ensure_litellm_stub
 
@@ -474,6 +474,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             stock_name=None,
             original_query="AAPL.US",
             selection_source="manual",
+            batch_id=ANY,
             report_type="detailed",
             force_refresh=False,
             notify=True,
@@ -509,6 +510,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             stock_name="腾讯控股",
             original_query="00700",
             selection_source="autocomplete",
+            batch_id=ANY,
             report_type="detailed",
             force_refresh=False,
             notify=True,
@@ -544,6 +546,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             stock_name=None,
             original_query="HK00700",
             selection_source="manual",
+            batch_id=ANY,
             report_type="detailed",
             force_refresh=False,
             notify=True,
@@ -579,6 +582,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             stock_name=None,
             original_query="西安奕材-U",
             selection_source="manual",
+            batch_id=ANY,
             report_type="detailed",
             force_refresh=False,
             notify=True,
@@ -614,6 +618,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             stock_name=None,
             original_query="贵州茅台",
             selection_source="manual",
+            batch_id=ANY,
             report_type="detailed",
             force_refresh=False,
             notify=True,
@@ -643,14 +648,22 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 202)
+        payload = json.loads(response.body)
+        self.assertIn("batch_id", payload)
+        self.assertEqual(len(payload["batch_id"]), 14)
         queue.submit_tasks_batch.assert_called_once_with(
             stock_codes=["600519", "000001"],
             stock_name=None,
             original_query="uploaded.csv",
             selection_source="import",
+            batch_id=ANY,
             report_type="detailed",
             force_refresh=False,
             notify=True,
+        )
+        self.assertEqual(
+            queue.submit_tasks_batch.call_args.kwargs["batch_id"],
+            payload["batch_id"],
         )
 
     def test_trigger_analysis_rejects_cross_request_duplicate_for_equivalent_code_shapes(self) -> None:
@@ -738,6 +751,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             stock_name=None,
             original_query="茅台,平安银行",
             selection_source="import",
+            batch_id=ANY,
             report_type="detailed",
             force_refresh=False,
             notify=True,
@@ -776,10 +790,13 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         self.assertEqual(payload["submitted_tasks"], 120)
         self.assertEqual(payload["duplicate_tasks"], 0)
         self.assertEqual(payload["source"], "tushare")
+        self.assertIn("batch_id", payload)
+        self.assertEqual(len(payload["batch_id"]), 14)
         self.assertEqual(len(payload["sample_task_ids"]), 10)
         self.assertEqual(len(queue_stub.calls), 3)
         self.assertEqual(queue_stub.calls[0]["selection_source"], "import")
         self.assertEqual(queue_stub.calls[0]["notify"], False)
+        self.assertTrue(all(call["batch_id"] == payload["batch_id"] for call in queue_stub.calls))
 
     def test_trigger_universe_analysis_raises_when_universe_unavailable(self) -> None:
         if trigger_universe_analysis is None:

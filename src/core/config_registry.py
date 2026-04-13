@@ -1387,7 +1387,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_editable": True,
         "default_value": "3",
         "options": [],
-        "validation": {"min": 1, "max": 20},
+        "validation": {"min": 1, "max": 50},
         "display_order": 50,
     },
     "ANALYSIS_DELAY": {

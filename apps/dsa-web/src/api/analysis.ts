@@ -149,11 +149,16 @@ export const analysisApi = {
    */
   getTasks: async (params?: {
     status?: string;
+    batchId?: string;
     limit?: number;
   }): Promise<TaskListResponse> => {
+    const queryParams: Record<string, string | number> = {};
+    if (params?.status) queryParams.status = params.status;
+    if (params?.batchId) queryParams.batch_id = params.batchId;
+    if (params?.limit != null) queryParams.limit = params.limit;
     const response = await apiClient.get<Record<string, unknown>>(
       '/api/v1/analysis/tasks',
-      { params }
+      { params: queryParams }
     );
 
     const data = toCamelCase<TaskListResponse>(response.data);

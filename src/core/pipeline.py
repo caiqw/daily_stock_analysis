@@ -63,6 +63,7 @@ class StockAnalysisPipeline:
         source_message: Optional[BotMessage] = None,
         query_id: Optional[str] = None,
         query_source: Optional[str] = None,
+        batch_id: Optional[str] = None,
         save_context_snapshot: Optional[bool] = None
     ):
         """
@@ -77,6 +78,7 @@ class StockAnalysisPipeline:
         self.source_message = source_message
         self.query_id = query_id
         self.query_source = self._resolve_query_source(query_source)
+        self.batch_id = batch_id
         self.save_context_snapshot = (
             self.config.save_context_snapshot if save_context_snapshot is None else save_context_snapshot
         )
@@ -419,6 +421,7 @@ class StockAnalysisPipeline:
                     self.db.save_analysis_history(
                         result=result,
                         query_id=query_id,
+                        batch_id=self.batch_id,
                         report_type=report_type.value,
                         news_content=news_context,
                         context_snapshot=context_snapshot,
@@ -764,6 +767,7 @@ class StockAnalysisPipeline:
                     self.db.save_analysis_history(
                         result=result,
                         query_id=query_id,
+                        batch_id=self.batch_id,
                         report_type=report_type.value,
                         news_content=None,
                         context_snapshot=initial_context,

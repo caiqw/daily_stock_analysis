@@ -71,6 +71,7 @@ class HistoryService:
     def get_history_list(
         self,
         stock_code: Optional[str] = None,
+        batch_id: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         page: int = 1,
@@ -112,6 +113,7 @@ class HistoryService:
             # Use new paginated query method
             records, total = self.db.get_analysis_history_paginated(
                 code=stock_code,
+                batch_id=batch_id,
                 start_date=start_dt,
                 end_date=end_dt,
                 offset=offset,
@@ -124,6 +126,7 @@ class HistoryService:
                 items.append({
                     "id": record.id,
                     "query_id": record.query_id,
+                    "batch_id": getattr(record, "batch_id", None),
                     "stock_code": record.code,
                     "stock_name": record.name,
                     "report_type": record.report_type,

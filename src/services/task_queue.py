@@ -71,6 +71,7 @@ class TaskInfo:
     completed_at: Optional[datetime] = None
     original_query: Optional[str] = None
     selection_source: Optional[str] = None
+    batch_id: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert task info into an API-friendly dictionary."""
@@ -88,6 +89,7 @@ class TaskInfo:
             "error": self.error,
             "original_query": self.original_query,
             "selection_source": self.selection_source,
+            "batch_id": self.batch_id,
         }
     
     def copy(self) -> 'TaskInfo':
@@ -107,6 +109,7 @@ class TaskInfo:
             completed_at=self.completed_at,
             original_query=self.original_query,
             selection_source=self.selection_source,
+            batch_id=self.batch_id,
         )
 
 
@@ -298,6 +301,7 @@ class AnalysisTaskQueue:
         stock_name: Optional[str] = None,
         original_query: Optional[str] = None,
         selection_source: Optional[str] = None,
+        batch_id: Optional[str] = None,
         report_type: str = "detailed",
         force_refresh: bool = False,
     ) -> TaskInfo:
@@ -327,6 +331,7 @@ class AnalysisTaskQueue:
             stock_name=stock_name,
             original_query=original_query,
             selection_source=selection_source,
+            batch_id=batch_id,
             report_type=report_type,
             force_refresh=force_refresh,
         )
@@ -340,6 +345,7 @@ class AnalysisTaskQueue:
         stock_name: Optional[str] = None,
         original_query: Optional[str] = None,
         selection_source: Optional[str] = None,
+        batch_id: Optional[str] = None,
         report_type: str = "detailed",
         force_refresh: bool = False,
         notify: bool = True,
@@ -379,6 +385,7 @@ class AnalysisTaskQueue:
                     report_type=report_type,
                     original_query=original_query,
                     selection_source=selection_source,
+                    batch_id=batch_id,
                 )
                 self._tasks[task_id] = task_info
                 self._analyzing_stocks[dedupe_key] = task_id
@@ -532,6 +539,7 @@ class AnalysisTaskQueue:
                 report_type=report_type,
                 force_refresh=force_refresh,
                 query_id=task_id,
+                batch_id=task.batch_id if task else None,
                 send_notification=notify,
             )
             
