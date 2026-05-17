@@ -90,6 +90,7 @@ const REPORT_TEXT = {
     netProfitYoy: '净利润同比',
     loadingCompanyInsights: '加载公司信息与财务指标中...',
     companyInsightsUnavailable: '暂无公司信息与财务指标数据',
+    reanalyze: '重新分析',
   },
   en: {
     keyInsights: 'KEY INSIGHTS',
@@ -177,6 +178,7 @@ const REPORT_TEXT = {
     netProfitYoy: 'Net Profit YoY',
     loadingCompanyInsights: 'Loading company profile and financial metrics...',
     companyInsightsUnavailable: 'Company profile and financial metrics are unavailable',
+    reanalyze: 'Reanalyze',
   },
 } as const;
 

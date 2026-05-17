@@ -5,10 +5,13 @@
 
 // ============ Request Types ============
 
+export type StockReportType = 'simple' | 'detailed' | 'full' | 'brief';
+export type ReportType = StockReportType | 'market_review';
+
 export interface AnalysisRequest {
   stockCode?: string;
   stockCodes?: string[];
-  reportType?: 'simple' | 'detailed' | 'full' | 'brief';
+  reportType?: StockReportType;
   forceRefresh?: boolean;
   asyncMode?: boolean;
   stockName?: string;
@@ -55,6 +58,17 @@ export interface UniverseStockListResponse {
   items: UniverseStockItem[];
 }
 
+export interface MarketReviewRequest {
+  sendNotification?: boolean;
+}
+
+export interface MarketReviewAccepted {
+  status: 'accepted';
+  message: string;
+  sendNotification: boolean;
+  taskId?: string;
+}
+
 // ============ Report Types ============
 
 export type ReportLanguage = 'zh' | 'en';
@@ -65,7 +79,7 @@ export interface ReportMeta {
   queryId: string;
   stockCode: string;
   stockName: string;
-  reportType: 'simple' | 'detailed' | 'full' | 'brief';
+  reportType: ReportType;
   reportLanguage?: ReportLanguage;
   createdAt: string;
   currentPrice?: number;
@@ -196,6 +210,7 @@ export interface TaskStatus {
   status: 'pending' | 'processing' | 'completed' | 'failed';
   progress?: number;
   result?: AnalysisResult;
+  marketReviewReport?: string;
   error?: string;
   stockName?: string;
   originalQuery?: string;
@@ -246,7 +261,7 @@ export interface HistoryItem {
   batchId?: string;
   stockCode: string;
   stockName?: string;
-  reportType?: string;
+  reportType?: ReportType;
   sentimentScore?: number;
   signalScore?: number;
   operationAdvice?: string;

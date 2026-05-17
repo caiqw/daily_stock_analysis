@@ -12,7 +12,7 @@
 
 import logging
 import uuid
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 
 from src.repositories.analysis_repo import AnalysisRepository
 from src.report_language import (
@@ -36,6 +36,7 @@ class AnalysisService:
     def __init__(self):
         """初始化分析服务"""
         self.repo = AnalysisRepository()
+        self.last_error: Optional[str] = None
     
     def analyze_stock(
         self,
@@ -44,7 +45,8 @@ class AnalysisService:
         force_refresh: bool = False,
         query_id: Optional[str] = None,
         batch_id: Optional[str] = None,
-        send_notification: bool = True
+        send_notification: bool = True,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         执行股票分析
@@ -63,6 +65,7 @@ class AnalysisService:
             - report: 分析报告
         """
         try:
+            self.last_error = None
             # 导入分析相关模块
             from src.config import get_config
             from src.core.pipeline import StockAnalysisPipeline
@@ -81,6 +84,7 @@ class AnalysisService:
                 query_id=query_id,
                 query_source="api",
                 batch_id=batch_id,
+                progress_callback=progress_callback,
             )
             
             # 确定报告类型 (API: simple/detailed/full/brief -> ReportType)
@@ -91,17 +95,24 @@ class AnalysisService:
                 code=stock_code,
                 skip_analysis=False,
                 single_stock_notify=send_notification,
-                report_type=rt
+                report_type=rt,
             )
             
             if result is None:
                 logger.warning(f"分析股票 {stock_code} 返回空结果")
+                self.last_error = self.last_error or f"分析股票 {stock_code} 返回空结果"
+                return None
+
+            if not getattr(result, "success", True):
+                self.last_error = getattr(result, "error_message", None) or f"分析股票 {stock_code} 失败"
+                logger.warning(f"分析股票 {stock_code} 未成功完成: {self.last_error}")
                 return None
             
             # 构建响应
             return self._build_analysis_response(result, query_id, report_type=rt.value)
             
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"分析股票 {stock_code} 失败: {e}", exc_info=True)
             return None
     

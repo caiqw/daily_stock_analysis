@@ -31,6 +31,7 @@ type SubmitAnalysisOptions = {
   originalQuery?: string;
   selectionSource?: SelectionSource;
   notify?: boolean;
+  forceRefresh?: boolean;
 };
 
 let reportRequestSeq = 0;
@@ -407,6 +408,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     const originalQuery = (options?.originalQuery ?? state.query).trim();
     const notify = options?.notify ?? state.notify;
     const originalQueryLower = originalQuery.toLowerCase();
+    const forceRefresh = options?.forceRefresh ?? false;
 
     if (originalQueryLower.startsWith('recommendation:') && !state.canAnalyzeRecommendation) {
       set({
@@ -455,6 +457,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
         originalQuery: originalQuery || stockCodeInput,
         selectionSource,
         notify,
+        forceRefresh,
       });
 
       if (requestId !== analyzeRequestSeq) {
