@@ -83,7 +83,6 @@ const RecommendationPage: React.FC = () => {
   const [isPoolPreviewLoading, setIsPoolPreviewLoading] = useState(false);
   const [poolPreviewRecord, setPoolPreviewRecord] = useState<HistoryItem | null>(null);
   const latestSeenRecordIdRef = useRef<number | null>(null);
-  const autoPoolHistoryHydrationTriggeredRef = useRef(false);
 
   const {
     query,
@@ -623,36 +622,6 @@ const RecommendationPage: React.FC = () => {
     await setHistoryWindowDays(null);
     await loadAllHistory();
   }, [loadAllHistory, setHistoryWindowDays]);
-
-  useEffect(() => {
-    // Leave pool mode: allow next auto hydration cycle.
-    if (sectionMode !== 'pool') {
-      autoPoolHistoryHydrationTriggeredRef.current = false;
-      return;
-    }
-    // Already complete: clear trigger so future stale state can re-trigger.
-    if (pendingHistoryDetailCount <= 0) {
-      autoPoolHistoryHydrationTriggeredRef.current = false;
-      return;
-    }
-    // Avoid repeated large-history auto loading loops in one analyzed session.
-    if (autoPoolHistoryHydrationTriggeredRef.current) {
-      return;
-    }
-    // Don't compete with ongoing loading actions.
-    if (isLoadingAllHistory || isLoadingMore) {
-      return;
-    }
-
-    autoPoolHistoryHydrationTriggeredRef.current = true;
-    void handleLoadPoolHistoryDetails();
-  }, [
-    handleLoadPoolHistoryDetails,
-    isLoadingAllHistory,
-    isLoadingMore,
-    pendingHistoryDetailCount,
-    sectionMode,
-  ]);
 
   const pendingCount = visibleActiveTasks.filter((task) => task.status === 'pending').length;
   const processingCount = visibleActiveTasks.filter((task) => task.status === 'processing').length;

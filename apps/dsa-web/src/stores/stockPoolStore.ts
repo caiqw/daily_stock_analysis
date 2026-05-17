@@ -188,24 +188,23 @@ async function fetchHistory(
       if (newItems.length > 0) {
         set({ historyItems: sortHistoryByCreatedAtDesc([...newItems, ...get().historyItems]) });
       }
-      set({ historyTotal: response.total });
+      const updatedCount = get().historyItems.length;
+      set({ historyTotal: response.total, hasMore: updatedCount < response.total });
     } else if (reset) {
       set({
         historyItems: sortHistoryByCreatedAtDesc(response.items),
         currentPage: 1,
         historyTotal: response.total,
+        hasMore: response.items.length < response.total,
       });
     } else {
+      const merged = sortHistoryByCreatedAtDesc([...get().historyItems, ...response.items]);
       set({
-        historyItems: sortHistoryByCreatedAtDesc([...get().historyItems, ...response.items]),
+        historyItems: merged,
         currentPage: page,
         historyTotal: response.total,
+        hasMore: merged.length < response.total,
       });
-    }
-
-    if (!silent) {
-      const totalLoaded = reset ? response.items.length : get().historyItems.length;
-      set({ hasMore: totalLoaded < response.total });
     }
 
     const visibleIds = new Set(get().historyItems.map((item) => item.id));
@@ -225,11 +224,14 @@ async function fetchHistory(
     set({ error: getParsedApiError(error) });
     return null;
   } finally {
-    if (requestId === historyRequestSeq) {
-      set({
-        isLoadingHistory: false,
-        isLoadingMore: false,
-      });
+    // Non-silent requests always own their loading flags:
+    // - If superseded by another non-silent request: that request already cleared isLoadingMore
+    //   (reset path sets isLoadingMore:false) so clearing here is harmless.
+    // - If superseded by a silent request: silent never touches flags, so we must clear here
+    //   to prevent isLoadingMore from getting permanently stuck.
+    // Silent requests never set loading flags so they never need to clear them.
+    if (!silent) {
+      set({ isLoadingHistory: false, isLoadingMore: false });
     }
   }
 }
@@ -312,11 +314,8 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
 
   selectHistoryItem: async (recordId) => {
     const requestId = ++reportRequestSeq;
-    const shouldShowInitialLoading = !get().selectedReport;
 
-    if (shouldShowInitialLoading) {
-      set({ isLoadingReport: true });
-    }
+    set({ isLoadingReport: true, selectedReport: null });
 
     try {
       const report = await historyApi.getDetail(recordId);
@@ -652,7 +651,6 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
         set({ isAnalyzing: false });
       }
     }
-    return null;
   },
 
   syncTaskCreated: (task) => {
