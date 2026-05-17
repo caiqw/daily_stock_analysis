@@ -27,6 +27,9 @@ def main() -> int:
     """
     启动 Web 服务
     """
+    from src.config import setup_env
+    setup_env()
+
     # 兼容旧版环境变量名
     host = os.getenv("WEBUI_HOST", os.getenv("API_HOST", "127.0.0.1"))
     port = int(os.getenv("WEBUI_PORT", os.getenv("API_PORT", "8000")))
@@ -37,10 +40,8 @@ def main() -> int:
 
     try:
         import uvicorn
-        from src.config import setup_env
         from src.logging_config import setup_logging
 
-        setup_env()
         setup_logging(log_prefix="web_server")
 
         uvicorn.run(
