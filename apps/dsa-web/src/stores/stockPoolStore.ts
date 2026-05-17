@@ -90,6 +90,7 @@ export interface StockPoolState {
   loadUniverseStocks: () => Promise<void>;
   toggleUniverseStockSelection: (stockCode: string) => void;
   toggleSelectAllUniverseStocks: (stockCodes: string[]) => void;
+  selectTopNUniverseStocks: (stockCodes: string[], n: number) => void;
   clearUniverseStockSelection: () => void;
   submitSelectedUniverseAnalysis: (stockCodes?: string[]) => Promise<string | null>;
   setNotify: (notify: boolean) => void;
@@ -579,6 +580,11 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
       }
     }
     set({ selectedUniverseStockCodes: Array.from(selected) });
+  },
+
+  selectTopNUniverseStocks: (stockCodes, n) => {
+    const count = Math.max(0, Math.min(n, stockCodes.length));
+    set({ selectedUniverseStockCodes: stockCodes.slice(0, count) });
   },
 
   clearUniverseStockSelection: () => {

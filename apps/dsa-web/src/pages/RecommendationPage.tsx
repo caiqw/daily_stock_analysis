@@ -79,6 +79,7 @@ const RecommendationPage: React.FC = () => {
   const [resultScopeFilter, setResultScopeFilter] = useState<ResultScopeFilter>('all');
   const [resultKeyword, setResultKeyword] = useState('');
   const [hasNewCompleted, setHasNewCompleted] = useState(false);
+  const [topNInput, setTopNInput] = useState('');
   const [isPoolPreviewOpen, setIsPoolPreviewOpen] = useState(false);
   const [isPoolPreviewLoading, setIsPoolPreviewLoading] = useState(false);
   const [poolPreviewRecord, setPoolPreviewRecord] = useState<HistoryItem | null>(null);
@@ -127,6 +128,7 @@ const RecommendationPage: React.FC = () => {
     submitAnalysis,
     openMarkdownDrawer,
     closeMarkdownDrawer,
+    selectTopNUniverseStocks,
   } = useStockPoolStore(
     useShallow((state) => ({
       query: state.query,
@@ -171,6 +173,7 @@ const RecommendationPage: React.FC = () => {
       submitAnalysis: state.submitAnalysis,
       openMarkdownDrawer: state.openMarkdownDrawer,
       closeMarkdownDrawer: state.closeMarkdownDrawer,
+      selectTopNUniverseStocks: state.selectTopNUniverseStocks,
     })),
   );
 
@@ -862,14 +865,38 @@ const RecommendationPage: React.FC = () => {
             </div>
 
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-subtle bg-base/40 px-3 py-2 text-xs text-secondary-text">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={visibleUniverseCodes.length > 0 && visibleUniverseCodes.every((code) => selectedUniverseSet.has(code))}
-                  onChange={() => toggleSelectAllUniverseStocks(visibleUniverseCodes)}
-                />
-                全选当前筛选结果
-              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={visibleUniverseCodes.length > 0 && visibleUniverseCodes.every((code) => selectedUniverseSet.has(code))}
+                    onChange={() => toggleSelectAllUniverseStocks(visibleUniverseCodes)}
+                  />
+                  全选当前筛选结果
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min="1"
+                    value={topNInput}
+                    onChange={(e) => setTopNInput(e.target.value)}
+                    placeholder="选前N只"
+                    className="input-surface h-7 w-20 rounded-md border bg-transparent px-2 text-xs"
+                  />
+                  <button
+                    type="button"
+                    className="rounded-md border border-subtle px-2 py-1 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => {
+                      const n = parseInt(topNInput, 10);
+                      if (Number.isNaN(n) || n <= 0) return;
+                      selectTopNUniverseStocks(sortedUniverseStocks.map((item) => item.stockCode), n);
+                    }}
+                    disabled={!topNInput || sortedUniverseStocks.length === 0}
+                  >
+                    勾选前N只
+                  </button>
+                </div>
+              </div>
               <div className="flex items-center gap-2">
                 <span>排序：</span>
                 <button
